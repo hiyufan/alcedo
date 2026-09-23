@@ -112,6 +112,53 @@ async fn youtube() {
     );
 }
 
+/// 抖音是本项目最核心也最容易被打穿的平台，必须有实网覆盖。
+///
+/// 用的是 `www.douyin.com/video/<aweme_id>` 这种干净形式，不是 App 里复制出来的
+/// `v.douyin.com` 短链——短链跳转后的地址带 `did` / `iid` / `u_code` 这些设备和
+/// 用户标识，不该进仓库。短链那条路由 `douyin_short_link` 单独覆盖。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn douyin() {
+    let info = parse("https://www.douyin.com/video/7688656311999812837").await;
+    assert_usable(&info);
+    assert!(!info.title.is_empty(), "标题为空");
+    assert!(!info.author.name.is_empty(), "作者为空");
+    assert!(info.duration > 0.0, "时长没取到");
+
+    // 直链必须带 Referer，抖音 CDN 缺了一律 403
+    assert_eq!(
+        info.video_headers.get("Referer").map(String::as_str),
+        Some("https://www.douyin.com/")
+    );
+    // playwm 是带水印的那一版，绝不能出现在结果里
+    assert!(
+        !info.video_url.contains("playwm"),
+        "拿到了带水印的地址: {}",
+        info.video_url
+    );
+}
+
+/// 短链要能跟到作品 ID。这条和上面那条走的是不同的分支。
+///
+/// 注意这里只验证"跟得到、解析得出"，不断言具体内容——短链本身可能过期。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn douyin_short_link() {
+    let client = Client::new().expect("初始化失败");
+    match client.parse("https://v.douyin.com/VYilKlUCpgw/").await {
+        Ok(info) => {
+            println!("短链 -> {}", info.title);
+            assert_usable(&info);
+        }
+        // 短链有有效期，过期了是内容的问题不是解析器的问题
+        Err(e) if e.reason == alcedo::Reason::Deleted => {
+            println!("短链已过期（{e}），跳过");
+        }
+        Err(e) => panic!("短链解析失败 [{}] {e}", e.reason),
+    }
+}
+
 #[tokio::test]
 #[ignore = "要联网"]
 async fn acfun() {

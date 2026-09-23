@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: 格式 / lint / 测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      # lint 基线写在 Cargo.toml 的 [workspace.lints] 里，
+      # 本地 cargo clippy 和这里跑的是同一套，不会出现"我本地是绿的"
+      - name: clippy
+        run: cargo clippy --workspace --all-targets
+
+      # 单元 + 契约测试，全部离线
+      - name: 测试
+        run: cargo test --workspace
+
+      - name: 文档能不能构建
+        run: cargo doc --workspace --no-deps
+
+  build:
+    name: 构建 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --workspace
+      - name: CLI 能跑起来
+        run: cargo run --release -p pvcli -- --list
+
+  # 依赖的已知漏洞和许可证。解析器直连不可信的外部服务，
+  # 依赖里混进一个有洞的 TLS/解析库后果很直接。
+  audit:
+    name: 依赖审计
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

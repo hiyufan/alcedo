@@ -5,7 +5,7 @@
 //!
 //! 重要的不是"每个请求都换 UA"，而是**一次解析里所有请求用同一个 UA**：
 //! 同一个 IP 上一串对不上号的客户端本身就是风控信号，cookie 握手那类要求会话
-//! 一致的流程也会直接失效。所以 UA 在 [`crate::Session`] 上取一次，全程复用。
+//! 一致的流程也会直接失效。所以 UA 在 [`crate::http::Http`] 上取一次，全程复用。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

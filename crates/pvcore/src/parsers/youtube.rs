@@ -11,7 +11,7 @@
 //!
 //! 客户端按"不需要 JS 且当前仍免 PO Token"的顺序试：`visionos` 是 yt-dlp 2026
 //! 之后的默认首选，`ios` / `android_vr` / `tv` 作为后备。哪天 YouTube 对某个客户端
-//! 加了限制，只要挪一下 [`CLIENTS`] 的顺序，不用改解析逻辑。
+//! 加了限制，只要挪一下本文件里 `CLIENTS` 的顺序，不用改解析逻辑。
 
 use serde_json::{json, Value};
 

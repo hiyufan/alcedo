@@ -8,6 +8,8 @@
 //! 重定向自己跟而不是交给 reqwest：短链跳转是解析流程的一部分（好几个平台要读
 //! 中间那一跳的 `Location`），而且每一跳都得重新过一遍 SSRF 检查。
 
+pub mod identity;
+pub mod resilience;
 pub mod ssrf;
 pub mod ua;
 

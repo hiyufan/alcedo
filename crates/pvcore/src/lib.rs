@@ -29,7 +29,11 @@ pub mod util;
 use std::sync::Arc;
 
 pub use error::{Error, Reason, Result};
+pub use http::resilience::{Decision, Governor, Limits};
 pub use http::Config;
+
+/// 全局闸门。进程内共享——熔断状态按平台算，每个 [`Client`] 各留一份就失去意义了。
+static GOVERNOR: Governor = Governor::new(Limits::const_default());
 pub use model::{Author, Format, Image, Source, VideoInfo};
 
 /// 解析入口。构造一次，全程复用——它持有连接池。
@@ -73,14 +77,12 @@ impl Client {
             ))
         })?;
 
+        self.pass_gate(source).await?;
         let http = http::Http::new(Arc::clone(&self.cfg), Some(source))?;
-        let fut = parsers::dispatch(&http, source, &url);
-        let mut info = tokio::time::timeout(self.cfg.total_timeout, fut)
-            .await
-            .map_err(|_| Error::new(Reason::Timeout, "整体解析超时"))??;
-
-        self.finish(&mut info, source, &url)?;
-        Ok(info)
+        let outcome = self
+            .with_timeout(parsers::dispatch(&http, source, &url))
+            .await;
+        self.settle(source, &url, outcome)
     }
 
     /// 已经知道平台和作品 ID 时直接解析。
@@ -88,14 +90,60 @@ impl Client {
         if id.trim().is_empty() {
             return Err(Error::unsupported("作品 ID 为空"));
         }
+        self.pass_gate(source).await?;
         let http = http::Http::new(Arc::clone(&self.cfg), Some(source))?;
-        let fut = parsers::dispatch_id(&http, source, id);
-        let mut info = tokio::time::timeout(self.cfg.total_timeout, fut)
-            .await
-            .map_err(|_| Error::new(Reason::Timeout, "整体解析超时"))??;
+        let outcome = self
+            .with_timeout(parsers::dispatch_id(&http, source, id))
+            .await;
+        self.settle(source, id, outcome)
+    }
 
-        self.finish(&mut info, source, id)?;
-        Ok(info)
+    async fn with_timeout(
+        &self,
+        fut: impl std::future::Future<Output = Result<VideoInfo>>,
+    ) -> Result<VideoInfo> {
+        tokio::time::timeout(self.cfg.total_timeout, fut)
+            .await
+            .unwrap_or_else(|_| Err(Error::new(Reason::Timeout, "整体解析超时")))
+    }
+
+    /// 把结果反馈给闸门，再做收尾。
+    fn settle(
+        &self,
+        source: Source,
+        target: &str,
+        outcome: Result<VideoInfo>,
+    ) -> Result<VideoInfo> {
+        match outcome {
+            Ok(mut info) => {
+                GOVERNOR.on_success(source);
+                self.finish(&mut info, source, target)?;
+                Ok(info)
+            }
+            Err(e) => {
+                GOVERNOR.on_failure(source, e.reason);
+                Err(e)
+            }
+        }
+    }
+
+    /// 限流 / 熔断闸门。令牌差一点就等一下，差太多或熔断中就直接说清楚。
+    async fn pass_gate(&self, source: Source) -> Result<()> {
+        match GOVERNOR.check(source) {
+            Decision::Go => Ok(()),
+            Decision::Wait(d) => {
+                tokio::time::sleep(d).await;
+                Ok(())
+            }
+            Decision::Tripped(d) => Err(Error::new(
+                Reason::Blocked,
+                format!(
+                    "{} 刚刚连续失败，已暂停请求 {} 秒（避免把风控撞得更死）",
+                    source.display_name(),
+                    d.as_secs().max(1)
+                ),
+            )),
+        }
     }
 
     /// 收尾：补默认字段、排好清晰度、确认真的拿到了东西。

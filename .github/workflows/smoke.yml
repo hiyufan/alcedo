@@ -1,0 +1,115 @@
+name: 实网冒烟
+
+# 这个工作流是整个项目的"平台改版早期预警"。
+#
+# 单元测试用的是固定样本，平台改了页面结构它们照样全绿——只有真的去打一次
+# 线上接口才知道解析器是不是还管用。lux 就是活例子：代码没问题，但 9 个月
+# 没人跑过真实链接，等用户发现时 46 个站点里已经挂了一片。
+on:
+  schedule:
+    # 每天 UTC 22:00 = 北京时间 06:00，赶在白天用量起来之前
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "只跑匹配的用例（留空 = 全部）"
+        required: false
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    name: 对着线上平台跑一遍
+    runs-on: ubuntu-latest
+    # 平台限流可能让单条卡住，别让它挂一整天
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 跑冒烟测试
+        id: smoke
+        # GitHub 的出口是机房 IP，国内平台多半会被挡——配了代理就用，
+        # 没配也照跑，至少海外平台的结果是有效的
+        env:
+          PV_PROXY: ${{ secrets.PV_PROXY }}
+          PV_PROXY_CN: ${{ secrets.PV_PROXY_CN }}
+          PV_BILI_COOKIE: ${{ secrets.PV_BILI_COOKIE }}
+          PV_XHS_COOKIE: ${{ secrets.PV_XHS_COOKIE }}
+          PV_YOUTUBE_COOKIE: ${{ secrets.PV_YOUTUBE_COOKIE }}
+        run: |
+          set -o pipefail
+          cargo test -p pvcore --test smoke -- \
+            --ignored --nocapture --test-threads=2 ${{ inputs.filter }} \
+            2>&1 | tee smoke.log
+
+      - name: 失败时开 / 更新一个 issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try { log = fs.readFileSync('smoke.log', 'utf8'); } catch (e) { log = '(没有日志)'; }
+            // 只留失败那几段，整份日志太长
+            const failed = log.split('\n')
+              .filter(l => /^test .* FAILED|panicked at|解析失败|assertion/.test(l))
+              .slice(0, 40).join('\n');
+
+            const title = '实网冒烟失败：可能有平台改版了';
+            const body = [
+              `[${new Date().toISOString().slice(0, 16)}] 定时冒烟测试红了。`,
+              '',
+              '**先判断是哪一类**：',
+              '- 只有国内平台红 → 多半是 GitHub 机房 IP 被挡，看看 `PV_PROXY_CN` 还有效吗',
+              '- 只有 YouTube 红 → 出口 IP 被判机器人，换出口或配 `PV_YOUTUBE_COOKIE`',
+              '- 单个平台红、报错是 `[parse]` → **这才是真的改版了，要改解析器**',
+              '',
+              '```',
+              failed || '(没抓到失败明细，看完整日志)',
+              '```',
+              '',
+              `[完整日志](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+            ].join('\n');
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'smoke-failure',
+            });
+
+            if (open.length > 0) {
+              // 已经有一个开着就追加评论，别每天新开一个
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['smoke-failure'],
+              });
+            }
+
+      - name: 恢复了就关掉 issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'smoke-failure',
+            });
+            for (const issue of open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '冒烟测试已恢复，自动关闭。',
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed',
+              });
+            }

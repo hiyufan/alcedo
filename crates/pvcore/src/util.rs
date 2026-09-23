@@ -33,7 +33,8 @@ pub fn last_path_segment(url: &str) -> Option<String> {
 
 /// 从一段文本里抠出第一个 http(s) 链接。
 ///
-/// 用户经常整段粘贴 App 的分享文案（"3.14 复制打开抖音，看看…… https://v.douyin.com/xxx/"）。
+/// 用户经常整段粘贴 App 的分享文案，形如
+/// `3.14 复制打开抖音，看看…… <https://v.douyin.com/xxx/>`。
 pub fn extract_url(text: &str) -> Option<&str> {
     let start = text
         .find("http://")

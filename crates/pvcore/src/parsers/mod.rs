@@ -21,6 +21,7 @@ pub mod meta;
 pub mod pipixia;
 pub mod qqvideo;
 pub mod redbook;
+pub mod signer;
 pub mod simple;
 pub mod sohu;
 pub mod weibo;

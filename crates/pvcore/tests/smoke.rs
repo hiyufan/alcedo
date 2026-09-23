@@ -164,3 +164,27 @@ async fn missing_content_is_classified_as_deleted() {
         "内容不存在被误报成解析器过期，站长会去查一个不存在的问题"
     );
 }
+
+/// 匿名 ttwid 能不能领到。这条不需要真实作品链接，所以能常态验证。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn bytedance_guest_identity() {
+    let cfg = std::sync::Arc::new(pvcore::Config::from_env());
+    let http = pvcore::http::Http::new(cfg, Some(pvcore::Source::DouYin)).unwrap();
+
+    pvcore::http::identity::forget_bytedance();
+    let first = pvcore::http::identity::bytedance_ttwid(&http).await;
+    let Some(ttwid) = first else {
+        panic!("领不到 ttwid——这个端点一直是免签名的，挂了说明抖音改了规则");
+    };
+    println!("ttwid = {}…", &ttwid[..ttwid.len().min(24)]);
+    assert!(ttwid.len() > 20, "ttwid 看着不像真的: {ttwid}");
+
+    // 第二次该走缓存，不再发请求
+    let second = pvcore::http::identity::bytedance_ttwid(&http).await;
+    assert_eq!(
+        second.as_deref(),
+        Some(ttwid.as_str()),
+        "同一份身份该被复用"
+    );
+}

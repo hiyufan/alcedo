@@ -9,8 +9,9 @@
 use serde_json::Value;
 
 use crate::error::{Error, Reason, Result};
-use crate::http::{Http, Req};
-use crate::model::{short_side, Author, Format, Image, VideoInfo};
+use crate::http::{identity, Http, Req};
+use crate::model::{short_side, Author, Format, Image, Source, VideoInfo};
+use crate::parsers::signer::Signer;
 use crate::util;
 
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
@@ -85,14 +86,36 @@ async fn slides_info(http: &Http, video_id: &str) -> Result<Option<Value>> {
     // request_source=200 也会被 filter，先判就会误报。
     let mut filtered: Option<Value> = None;
 
+    // 免签名这条路目前还通，但把"浏览器本来就会带的东西"带上能明显少撞风控：
+    // 匿名 ttwid 是平台自己免签名下发的，成本几乎为零。
+    let ttwid = if http.config().douyin_cookie.is_none() {
+        identity::bytedance_ttwid(http).await
+    } else {
+        None
+    };
+    // a_bogus 这类会轮换的签名交给外部签名器；没配就走免签名路径，不报错
+    let signer = Signer::for_source(Source::DouYin);
+
     for api in urls {
-        let mut req = Req::get(&api).referer("https://www.douyin.com/");
+        let query = api.split_once('?').map_or("", |(_, q)| q);
+        let sig = signer.sign(http, Source::DouYin, &api, query, "").await;
+        let signed = sig.apply_url(&api);
+
+        let mut req = sig.apply(Req::get(&signed).referer("https://www.douyin.com/"));
         if let Some(c) = http.config().douyin_cookie.as_deref() {
             req = req.cookie_header(c);
+        } else if let Some(t) = ttwid.as_deref() {
+            req = req.cookie("ttwid", t);
         }
+
         let Ok(resp) = http.send(req).await else {
             continue;
         };
+        if matches!(resp.status.as_u16(), 401 | 403 | 412) {
+            // 这份身份被标记了，扔掉，下次重新领一个
+            identity::forget_bytedance();
+            continue;
+        }
         if !resp.status.is_success() {
             continue;
         }

@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["rt", "time", "sync", "macros", "net"] }
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros", "net", "process", "io-util"] }
 # rustls-no-provider + 自己装 ring：默认的 rustls feature 会拉 aws-lc-rs，
 # 那东西在 Windows 上要 NASM + CMake，在 musl 上也常出岔子。ring 纯 Rust 路径
 # 更省事，性能差异对我们这种小报文场景可以忽略。

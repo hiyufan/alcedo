@@ -51,7 +51,8 @@ jobs:
 
       - name: 构建矩阵
         id: matrix
-        run: echo "matrix=$(jq -c '{include: .}' npm/platforms.json)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "matrix=$(jq -c '{include: .}' npm/platforms.json)" >> "$GITHUB_OUTPUT"
 
   build:
     name: 构建 (${{ matrix.id }})

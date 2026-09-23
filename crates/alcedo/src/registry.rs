@@ -104,6 +104,51 @@ pub fn supported() -> Vec<Source> {
     all
 }
 
+/// 解析这个平台时**第一个**会连上的主机。
+///
+/// 预热连接时用。注意不是平台的门户域名，而是解析器真正请求的那个接口主机——
+/// 预热 `www.douyin.com` 对随后请求 `www.iesdouyin.com` 的连接毫无帮助。
+///
+/// 返回 `None` 表示第一跳取决于具体链接（短链跳转、页面抓取），预热没有固定目标。
+pub const fn warmup_host(source: Source) -> Option<&'static str> {
+    Some(match source {
+        Source::DouYin | Source::XiGua => "www.iesdouyin.com",
+        Source::BiliBili => "api.bilibili.com",
+        Source::YouTube => "www.youtube.com",
+        Source::TikTok => "www.tiktok.com",
+        Source::RedBook => "www.xiaohongshu.com",
+        Source::Twitter => "cdn.syndication.twimg.com",
+        Source::Instagram | Source::Threads => "i.instagram.com",
+        Source::Vimeo => "player.vimeo.com",
+        Source::Twitch => "gql.twitch.tv",
+        Source::Reddit => "www.reddit.com",
+        Source::Pinterest => "www.pinterest.com",
+        Source::DailyMotion => "www.dailymotion.com",
+        Source::QQVideo => "vv.video.qq.com",
+        Source::Sohu => "api.tv.sohu.com",
+        Source::CCTV => "vdn.apps.cntv.cn",
+        Source::HuYa => "liveapi.huya.com",
+        Source::HaoKan => "haokan.baidu.com",
+        Source::WeiShi => "h5.weishi.qq.com",
+        Source::QuanMin => "quanmin.hao222.com",
+        Source::LiShiPin => "www.pearvideo.com",
+        Source::PiPiXia => "api.pipix.com",
+        Source::PiPiGaoXiao => "share.ippzone.com",
+        Source::ZuiYou => "share.xiaochuankeji.cn",
+        Source::DouPai => "v2.doupai.cc",
+        Source::QuanMinKGe => "kg.qq.com",
+        Source::SixRoom => "v.6.cn",
+        Source::AcFun => "www.acfun.cn",
+        Source::WeiBo => "h5.video.weibo.com",
+        // 这几个第一跳就取决于用户给的链接，没有固定主机可以预热
+        Source::KuaiShou
+        | Source::LvZhou
+        | Source::MeiPai
+        | Source::XinPianChang
+        | Source::Facebook => return None,
+    })
+}
+
 /// 某个平台认哪些域名。
 pub fn domains_of(source: Source) -> Vec<&'static str> {
     DOMAINS
@@ -180,6 +225,25 @@ mod tests {
     fn unknown_host_returns_none() {
         assert_eq!(detect("https://example.com/video/1"), None);
         assert_eq!(detect("not a url"), None);
+    }
+
+    #[test]
+    fn warmup_host_is_decided_for_every_source() {
+        // 新增平台时必须显式表态：要么给出第一跳主机，要么写明"取决于链接"。
+        // match 是穷尽的，所以漏了编译期就过不去——这条测的是给出的值本身合理。
+        for s in Source::ALL.iter().copied() {
+            if let Some(host) = warmup_host(s) {
+                assert!(!host.is_empty(), "{s} 的预热主机是空的");
+                assert!(!host.contains('/'), "{s} 的预热主机不该带路径: {host}");
+                assert!(host.contains('.'), "{s} 的预热主机不像域名: {host}");
+            }
+        }
+        // 抽查几个：预热的必须是解析器真正请求的接口主机，
+        // 不是平台门户——预热错了等于没预热
+        assert_eq!(warmup_host(Source::DouYin), Some("www.iesdouyin.com"));
+        assert_eq!(warmup_host(Source::BiliBili), Some("api.bilibili.com"));
+        // 第一跳取决于用户给的链接，没有固定目标
+        assert_eq!(warmup_host(Source::KuaiShou), None);
     }
 
     #[test]

@@ -57,10 +57,19 @@ async fn main() {
         std::process::exit(1);
     }
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = samples[samples.len() / 2];
-    let first = samples.first().copied().unwrap_or(0.0);
+    // 样本数是手输的轮次，几十上百，转 f64 再取整没有精度问题
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let pct = |p: f64| samples[((samples.len() - 1) as f64 * p) as usize];
     println!(
-        "\n成功 {}/{rounds}  最快 {first:.1}ms  中位 {median:.1}ms",
-        samples.len()
+        "\n成功 {}/{rounds}  p50 {:.0}ms  p90 {:.0}ms  p99 {:.0}ms  最快 {:.0}ms  最慢 {:.0}ms",
+        samples.len(),
+        pct(0.50),
+        pct(0.90),
+        pct(0.99),
+        samples[0],
+        samples[samples.len() - 1],
     );
+    // 尾延迟才是用户真正感觉到的。p90/p50 拉得开说明瓶颈是"偶尔一次很慢"，
+    // 那时候该上对冲请求，而不是去抠中位数那几毫秒。
+    println!("  p90/p50 = {:.1}×", pct(0.90) / pct(0.50));
 }

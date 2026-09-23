@@ -55,6 +55,48 @@ impl Client {
         Self { cfg: Arc::new(cfg) }
     }
 
+    /// 为指定平台预热连接：提前把 DNS、TCP、TLS 握手做完，顺带领好需要的匿名身份。
+    ///
+    /// 冷启动是实测里最大的一块固定开销——同一条链接首次解析比后续慢
+    /// 160~390 ms，全花在握手上（抖音还要多领一次游客身份）。服务端场景下
+    /// 这笔账由**每个平台的第一个用户**买单，而且连接池空闲超时之后还会再来一次。
+    ///
+    /// 启动时调一次，或者在流量低谷定期调，就能把它挪到用户请求之外：
+    ///
+    /// ```no_run
+    /// # async fn demo() -> alcedo::Result<()> {
+    /// let client = alcedo::Client::new()?;
+    /// client.prewarm(&[alcedo::Source::DouYin, alcedo::Source::BiliBili]).await;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// 全程尽力而为：预热失败不返回错误，也不影响后续解析。传入的平台如果
+    /// 第一跳取决于具体链接（快手、绿洲这些），会被跳过。
+    pub async fn prewarm(&self, sources: &[Source]) {
+        let tasks = sources.iter().filter_map(|&source| {
+            let host = registry::warmup_host(source)?;
+            let cfg = Arc::clone(&self.cfg);
+            Some(async move {
+                let Ok(http) = http::Http::new(cfg, Some(source)) else {
+                    return;
+                };
+                // HEAD 打根路径：只为把连接建起来，不关心响应内容
+                let warm = http
+                    .send(http::Req::head(format!("https://{host}/")))
+                    .await
+                    .is_ok();
+                // 字节系的匿名身份也提前领好，省掉首次解析那一次额外往返
+                if matches!(source, Source::DouYin | Source::XiGua)
+                    && http.config().douyin_cookie.is_none()
+                {
+                    let _ = http::identity::bytedance_ttwid(&http).await;
+                }
+                tracing::debug!(source = source.as_str(), ok = warm, "预热完成");
+            })
+        });
+        futures_util::future::join_all(tasks).await;
+    }
+
     /// 当前生效的配置。
     pub fn config(&self) -> &Config {
         &self.cfg

@@ -42,6 +42,20 @@ pub struct Config {
     pub max_body_bytes: usize,
     /// DNS 层的内网地址拦截
     pub ssrf_enforce: bool,
+    /// 对冲请求的触发时间：主请求超过这么久还没回来就补发一份，谁先回用谁。
+    /// **默认 0（关闭）**，靠 `ALCEDO_HEDGE_AFTER_MS` 打开。
+    ///
+    /// 对冲只在"平台后端实例有快有慢"时有效。如果慢是出在共享链路上
+    /// （本地代理、跨境线路），补发的请求会撞同一个瓶颈，白发一次。
+    ///
+    /// 本项目实测（经本地代理访问抖音）：p90 从 389ms 到 351ms，约 10%，
+    /// 进不了噪声之外；代价是偏慢的那部分请求翻倍。风控平台上多发请求
+    /// 本身就是风险，所以默认不开。
+    ///
+    /// 直连环境下平台侧方差更可能是主因，那时候开它有意义——但**开之前
+    /// 自己测一遍**：`ALCEDO_HEDGE_AFTER_MS=0` 和设成 p50~p90 之间的值各跑
+    /// 一次 `--example bench`，对比 p90。
+    pub hedge_after: Duration,
     /// B 站登录 cookie，能拿到更高清晰度
     pub bilibili_cookie: Option<String>,
     /// 小红书登录 cookie，机房 IP 基本必配
@@ -63,6 +77,7 @@ impl Default for Config {
             max_redirects: 8,
             max_body_bytes: 16 * 1024 * 1024,
             ssrf_enforce: true,
+            hedge_after: Duration::ZERO,
             bilibili_cookie: None,
             xhs_cookie: None,
             douyin_cookie: None,
@@ -87,6 +102,12 @@ impl Config {
             ssrf_enforce: !matches!(
                 env_any(&["ALCEDO_SSRF_DNS", "PARSE_VIDEO_SSRF_DNS"]).as_deref(),
                 Some("0")
+            ),
+            hedge_after: Duration::from_millis(
+                std::env::var("ALCEDO_HEDGE_AFTER_MS")
+                    .ok()
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0),
             ),
             bilibili_cookie: env_any(&["ALCEDO_BILI_COOKIE", "PARSE_VIDEO_BILI_COOKIE"]),
             xhs_cookie: env_any(&["ALCEDO_XHS_COOKIE", "PARSE_VIDEO_XHS_COOKIE"]),
@@ -166,7 +187,10 @@ fn client_for(cfg: &Config, proxy: Option<&str>) -> Result<Client> {
         .http2_adaptive_window(true)
         .http2_keep_alive_interval(Duration::from_secs(30))
         .http2_keep_alive_while_idle(true)
-        .pool_idle_timeout(Duration::from_secs(90))
+        // 低流量服务上这个值决定了"有多少比例的请求是冷启动"。90 秒太短——
+        // 实测冷启动要多花 160~390ms（DNS + TCP + TLS，抖音还要多领一次身份）。
+        // 平台侧一般能容忍几分钟的空闲连接。
+        .pool_idle_timeout(Duration::from_secs(300))
         .pool_max_idle_per_host(8)
         .tcp_keepalive(Duration::from_secs(60))
         .tcp_nodelay(true)
@@ -232,6 +256,16 @@ impl Req {
     pub fn post(url: impl Into<String>) -> Self {
         Self {
             method: Method::POST,
+            ..Self::get(url)
+        }
+    }
+
+    /// 一个 HEAD 请求。只为把连接建起来时用（见 [`crate::Client::prewarm`]）。
+    pub fn head(url: impl Into<String>) -> Self {
+        Self {
+            method: Method::HEAD,
+            // 预热不跟跳转：目的是握手，不是拿内容
+            follow: false,
             ..Self::get(url)
         }
     }
@@ -472,7 +506,7 @@ impl Http {
     pub async fn send(&self, req: Req) -> Result<Resp> {
         let mut attempt = 0;
         loop {
-            match self.send_once(&req).await {
+            match self.send_hedged(&req).await {
                 Ok(r) => return Ok(r),
                 Err(e) if attempt == 0 && e.reason.is_retryable() && req.body.is_none() => {
                     // 只重试幂等请求。POST 重发可能在对面产生第二条记录。
@@ -482,6 +516,37 @@ impl Http {
                 }
                 Err(e) => return Err(e),
             }
+        }
+    }
+
+    /// 带对冲的单次发送：主请求超过 `hedge_after` 还没回来就补发一份，谁先回用谁。
+    ///
+    /// 只对幂等的 GET 做。POST 补发可能在对面产生第二条记录，那是正确性问题，
+    /// 不是性能问题。
+    async fn send_hedged(&self, req: &Req) -> Result<Resp> {
+        let hedge_after = self.cfg.hedge_after;
+        if hedge_after.is_zero() || req.body.is_some() || req.method != Method::GET {
+            return self.send_once(req).await;
+        }
+
+        let primary = std::pin::pin!(self.send_once(req));
+        let timer = std::pin::pin!(tokio::time::sleep(hedge_after));
+
+        // 先只等主请求；它在阈值内回来（绝大多数情况）就一次都不多发
+        let primary = match futures_util::future::select(primary, timer).await {
+            futures_util::future::Either::Left((out, _)) => return out,
+            futures_util::future::Either::Right(((), primary)) => primary,
+        };
+
+        tracing::debug!(url = %req.url, "主请求偏慢, 发一份对冲");
+        let backup = std::pin::pin!(self.send_once(req));
+
+        // 谁先回用谁；先回的那个报错了就等另一个，别浪费已经发出去的请求
+        match futures_util::future::select(primary, backup).await {
+            futures_util::future::Either::Left((Ok(r), _)) => Ok(r),
+            futures_util::future::Either::Right((Ok(r), _)) => Ok(r),
+            futures_util::future::Either::Left((Err(e), backup)) => backup.await.or(Err(e)),
+            futures_util::future::Either::Right((Err(e), primary)) => primary.await.or(Err(e)),
         }
     }
 
@@ -719,6 +784,33 @@ mod tests {
         let err = read_capped(resp, 1024, None).await.unwrap_err();
         assert_eq!(err.reason, Reason::Parse);
         assert!(err.detail.contains("上限"));
+    }
+
+    #[test]
+    fn head_request_does_not_follow_redirects() {
+        // 预热只为握手，跟跳转纯属多发请求
+        let r = Req::head("https://x/");
+        assert_eq!(r.method, Method::HEAD);
+        assert!(!r.follow);
+        assert!(r.body.is_none());
+    }
+
+    #[test]
+    fn hedging_is_off_by_default() {
+        // 多发请求在风控平台上本身是风险，实测收益又进不了噪声之外，
+        // 所以必须是显式开启
+        assert!(Config::default().hedge_after.is_zero());
+    }
+
+    #[test]
+    fn hedge_env_var_turns_it_on() {
+        // 只验证解析逻辑本身，不动全局环境变量
+        let parse = |v: Option<&str>| {
+            Duration::from_millis(v.and_then(|s| s.trim().parse().ok()).unwrap_or(0))
+        };
+        assert!(parse(None).is_zero());
+        assert!(parse(Some("乱写")).is_zero());
+        assert_eq!(parse(Some("300")), Duration::from_millis(300));
     }
 
     #[test]

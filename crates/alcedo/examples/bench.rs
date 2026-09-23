@@ -1,7 +1,7 @@
 //! 端到端延迟测量。
 //!
 //! ```bash
-//! cargo run --release -p pvcore --example bench -- <url> [次数]
+//! cargo run --release -p alcedo --example bench -- <url> [次数]
 //! ```
 //!
 //! 测的是**一个进程内重复解析同一条链接**：这是服务端的真实形态，也是连接池
@@ -24,7 +24,7 @@ async fn main() {
     let rounds: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(5);
 
     let started = Instant::now();
-    let client = pvcore::Client::new().expect("初始化失败");
+    let client = alcedo::Client::new().expect("初始化失败");
     println!(
         "构造 Client: {:.1}ms",
         started.elapsed().as_secs_f64() * 1000.0

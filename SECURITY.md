@@ -3,7 +3,7 @@
 ## 报告漏洞
 
 别开公开 issue。发邮件到 <yufan_ai@outlook.com>，或者用 GitHub 的
-[私密漏洞报告](https://github.com/hiyufan/pvcore/security/advisories/new)。
+[私密漏洞报告](https://github.com/hiyufan/alcedo/security/advisories/new)。
 
 请带上复现步骤和影响范围。会在 72 小时内回复。
 
@@ -16,10 +16,10 @@
 resolver 里（`http/ssrf.rs`）：解析到内网地址直接拒绝，且检查与实际连接用的是
 同一次解析结果，中间没有窗口让 DNS 记录被换掉。
 
-`PV_SSRF_DNS=0` 会关掉这层。**只有在内网自建平台镜像时才该关**，公网部署关掉
+`ALCEDO_SSRF_DNS=0` 会关掉这层。**只有在内网自建平台镜像时才该关**，公网部署关掉
 等于把内网探针开放给所有人。
 
-**响应体是不可信的。** 上限 16 MiB（`PV_MAX_BODY_BYTES`），流式读取，超了就断。
+**响应体是不可信的。** 上限 16 MiB（`ALCEDO_MAX_BODY_BYTES`），流式读取，超了就断。
 不用 `Content-Length` 预分配——对面报一个假的 10 GB 就能把进程打爆。
 
 **内存安全。** 全项目 `unsafe_code = "forbid"`，CI 强制。解析路径上零

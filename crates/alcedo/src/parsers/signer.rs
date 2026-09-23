@@ -13,8 +13,8 @@
 //! ## 怎么配
 //!
 //! ```text
-//! PV_SIGNER_DOUYIN=cmd:/opt/pv/douyin-signer      # 起一个子进程，stdin/stdout 走 JSON
-//! PV_SIGNER_DOUYIN=http://127.0.0.1:9000/sign     # 调一个常驻服务（推荐，省掉进程启动）
+//! ALCEDO_SIGNER_DOUYIN=cmd:/opt/alcedo/douyin-signer      # 起一个子进程，stdin/stdout 走 JSON
+//! ALCEDO_SIGNER_DOUYIN=http://127.0.0.1:9000/sign     # 调一个常驻服务（推荐，省掉进程启动）
 //! ```
 //!
 //! 约定的协议（两种传输一样）：
@@ -111,7 +111,7 @@ pub enum Signer {
 impl Signer {
     /// 读这个平台配的签名器。
     pub fn for_source(source: Source) -> Self {
-        let key = format!("PV_SIGNER_{}", source.as_str().to_ascii_uppercase());
+        let key = format!("ALCEDO_SIGNER_{}", source.as_str().to_ascii_uppercase());
         let Ok(raw) = std::env::var(&key) else {
             return Self::None;
         };

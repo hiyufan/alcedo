@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pvcore", "crates/pvcli"]
+members = ["crates/alcedo", "crates/alcedo-cli"]
 resolver = "2"
 
 [workspace.package]
@@ -7,8 +7,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/yourname/pvcore"
-authors = ["pvcore contributors"]
+repository = "https://github.com/yourname/alcedo"
+authors = ["alcedo contributors"]
 
 [workspace.dependencies]
 tokio = { version = "1", default-features = false }

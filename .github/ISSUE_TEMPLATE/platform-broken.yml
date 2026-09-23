@@ -8,7 +8,7 @@ body:
         **先跑一下这个**，它会告诉你是平台改版了还是你的网络问题：
 
         ```bash
-        pv --json "你的链接"
+        alcedo --json "你的链接"
         ```
 
         看返回里的 `reason`：
@@ -16,8 +16,8 @@ body:
         | reason | 含义 | 该谁处理 |
         | --- | --- | --- |
         | `parse` | 平台改版了 | **这个 issue 有用，请继续填** |
-        | `blocked` | 出口 IP 被风控 | 配 `PV_PROXY_CN` 或换出口 |
-        | `login` | 平台开始要登录 | 配对应的 `PV_*_COOKIE` |
+        | `blocked` | 出口 IP 被风控 | 配 `ALCEDO_PROXY_CN` 或换出口 |
+        | `login` | 平台开始要登录 | 配对应的 `ALCEDO_*_COOKIE` |
         | `deleted` | 这条内容没了 | 换个链接再试 |
 
   - type: dropdown
@@ -53,7 +53,7 @@ body:
     attributes:
       label: 完整输出
       description: |
-        `pv --json "链接" 2>&1` 的结果。
+        `alcedo --json "链接" 2>&1` 的结果。
         **贴之前先把 cookie、代理地址这类东西删掉。**
       render: text
     validations:
@@ -73,7 +73,7 @@ body:
     id: version
     attributes:
       label: 版本
-      description: "`pv --version`，或者 git 的 commit"
+      description: "`alcedo --version`，或者 git 的 commit"
     validations:
       required: true
 
@@ -84,7 +84,7 @@ body:
       description: 国内平台从境外机房访问基本都会被挡，这个信息很关键
       options:
         - 中国大陆
-        - 境外，配了 PV_PROXY_CN
+        - 境外，配了 ALCEDO_PROXY_CN
         - 境外，没配代理
         - 本机开发环境
     validations:

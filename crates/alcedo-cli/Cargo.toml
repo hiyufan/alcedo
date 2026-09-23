@@ -1,6 +1,6 @@
 [package]
-name = "pvcli"
-description = "pvcore 的命令行：解析分享链接，输出 JSON 或人类可读的摘要"
+name = "alcedo-cli"
+description = "alcedo 的命令行：解析分享链接，输出 JSON 或人类可读的摘要"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,11 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "pv"
+name = "alcedo"
 path = "src/main.rs"
 
 [dependencies]
-pvcore = { path = "../pvcore" }
+alcedo = { path = "../alcedo" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serde_json = { workspace = true }
 

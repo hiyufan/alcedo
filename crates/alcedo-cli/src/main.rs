@@ -1,16 +1,16 @@
-//! `pv` —— pvcore 的命令行入口。
+//! `alcedo` —— 命令行入口。
 //!
 //! ```text
-//! pv <链接或分享文案>          # 人类可读摘要
-//! pv --json <链接>             # 机器可读 JSON
-//! pv --list                    # 支持的平台
+//! alcedo <链接或分享文案>          # 人类可读摘要
+//! alcedo --json <链接>             # 机器可读 JSON
+//! alcedo --list                    # 支持的平台
 //! ```
 //!
 //! 没有引 clap：参数就这几个，手写解析省掉一个中等体量的依赖和它的编译时间。
 
 use std::process::ExitCode;
 
-use pvcore::{Client, Source, VideoInfo};
+use alcedo::{Client, Source, VideoInfo};
 
 fn main() -> ExitCode {
     let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -37,7 +37,7 @@ async fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("pv {}", env!("CARGO_PKG_VERSION"));
+        println!("alcedo {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
 
@@ -143,36 +143,36 @@ fn print_human(info: &VideoInfo) {
 }
 
 fn print_supported() {
-    let all = pvcore::registry::supported();
+    let all = alcedo::registry::supported();
     println!("支持 {} 个平台：", all.len());
     for s in all {
         println!(
             "  {:<14} {:<12} {}",
             s.as_str(),
             s.display_name(),
-            pvcore::registry::domains_of(s).join(", ")
+            alcedo::registry::domains_of(s).join(", ")
         );
     }
 }
 
 fn print_help() {
     println!(
-        "pv {ver} —— 视频平台解析器
+        "alcedo {ver} —— 视频平台解析器
 
 用法:
-  pv <链接或分享文案>     解析并打印摘要
-  pv --json <链接>        输出 JSON
-  pv --list               列出支持的平台
-  pv --version            版本号
+  alcedo <链接或分享文案>     解析并打印摘要
+  alcedo --json <链接>        输出 JSON
+  alcedo --list               列出支持的平台
+  alcedo --version            版本号
 
 环境变量:
-  PV_PROXY                所有平台的代理, 如 http://127.0.0.1:7890
-  PV_PROXY_CN             只给国内平台用的代理 (境外部署时需要)
-  PV_BILI_COOKIE          B 站登录 cookie, 能拿到更高清晰度
-  PV_XHS_COOKIE           小红书登录 cookie
-  PV_REQUEST_TIMEOUT      单个请求超时秒数 (默认 20)
-  PV_TOTAL_TIMEOUT        整体解析超时秒数 (默认 45)
-  PV_SSRF_DNS=0           关闭 DNS 层的内网地址拦截 (自建镜像时才需要)",
+  ALCEDO_PROXY                所有平台的代理, 如 http://127.0.0.1:7890
+  ALCEDO_PROXY_CN             只给国内平台用的代理 (境外部署时需要)
+  ALCEDO_BILI_COOKIE          B 站登录 cookie, 能拿到更高清晰度
+  ALCEDO_XHS_COOKIE           小红书登录 cookie
+  ALCEDO_REQUEST_TIMEOUT      单个请求超时秒数 (默认 20)
+  ALCEDO_TOTAL_TIMEOUT        整体解析超时秒数 (默认 45)
+  ALCEDO_SSRF_DNS=0           关闭 DNS 层的内网地址拦截 (自建镜像时才需要)",
         ver = env!("CARGO_PKG_VERSION")
     );
 }

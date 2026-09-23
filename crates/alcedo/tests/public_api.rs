@@ -2,14 +2,14 @@
 //!
 //! 这里不发网络请求——真正打平台接口的冒烟测试在 `smoke.rs`，默认 `#[ignore]`。
 
-use pvcore::{Client, Config, Reason, Source};
+use alcedo::{Client, Config, Reason, Source};
 
 #[test]
 fn every_source_is_reachable_from_some_domain() {
     // 注册表里漏登记域名的平台等于永远不会被调用到
-    for s in pvcore::registry::supported() {
+    for s in alcedo::registry::supported() {
         assert!(
-            !pvcore::registry::domains_of(s).is_empty(),
+            !alcedo::registry::domains_of(s).is_empty(),
             "{s} 没有登记任何域名，永远不会被识别出来"
         );
     }
@@ -18,7 +18,7 @@ fn every_source_is_reachable_from_some_domain() {
 #[test]
 fn source_identifiers_are_unique_and_stable() {
     // as_str 是对外 JSON 契约，重名会让上层把两个平台混起来
-    let all = pvcore::registry::supported();
+    let all = alcedo::registry::supported();
     let mut seen: Vec<&str> = Vec::new();
     for s in &all {
         let id = s.as_str();
@@ -69,7 +69,7 @@ fn detection_covers_the_url_shapes_users_actually_paste() {
         ("https://www.twitch.tv/videos/123456", Source::Twitch),
     ];
     for (url, want) in cases {
-        assert_eq!(pvcore::registry::detect(url), Some(want), "识别错了: {url}");
+        assert_eq!(alcedo::registry::detect(url), Some(want), "识别错了: {url}");
     }
 }
 
@@ -82,7 +82,7 @@ fn lookalike_domains_are_not_matched() {
         "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
         "https://bilibili.com.cn.attacker.io/video/BV1",
     ] {
-        assert_eq!(pvcore::registry::detect(url), None, "不该被识别: {url}");
+        assert_eq!(alcedo::registry::detect(url), None, "不该被识别: {url}");
     }
 }
 
@@ -150,11 +150,11 @@ fn error_reasons_all_have_user_facing_text() {
 
 #[test]
 fn video_info_serialises_to_the_documented_shape() {
-    let info = pvcore::VideoInfo {
+    let info = alcedo::VideoInfo {
         video_url: "https://cdn/v.mp4".into(),
         title: "标题".into(),
         source: Some(Source::DouYin),
-        formats: vec![pvcore::Format {
+        formats: vec![alcedo::Format {
             label: "1080p".into(),
             url: String::new(),
             ext: "mp4".into(),
@@ -178,6 +178,6 @@ fn video_info_serialises_to_the_documented_shape() {
     assert_eq!(f["video_url"], "https://cdn/v.m4s");
 
     // 能原样读回来
-    let back: pvcore::VideoInfo = serde_json::from_value(json).unwrap();
+    let back: alcedo::VideoInfo = serde_json::from_value(json).unwrap();
     assert_eq!(back, info);
 }

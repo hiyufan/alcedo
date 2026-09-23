@@ -195,7 +195,7 @@ async fn api_get(http: &Http, url: &str, cookie: Option<&str>) -> Result<Value> 
                 continue;
             }
             return Err(Error::blocked(
-                "B 站拒绝了服务器所在网络的访问 (412)，海外服务器请配置 PV_PROXY_CN 或 PV_BILI_COOKIE",
+                "B 站拒绝了服务器所在网络的访问 (412)，海外服务器请配置 ALCEDO_PROXY_CN 或 ALCEDO_BILI_COOKIE",
             ));
         }
         resp.error_for_status()?;

@@ -313,7 +313,7 @@ fn block_error(final_url: &str, html: &str) -> Error {
         .any(|m| head.contains(m) || title.contains(m))
     {
         return Error::blocked(
-            "小红书对服务器所在网络返回了验证页（被限流），请配置 PV_PROXY_CN 或 PV_XHS_COOKIE",
+            "小红书对服务器所在网络返回了验证页（被限流），请配置 ALCEDO_PROXY_CN 或 ALCEDO_XHS_COOKIE",
         );
     }
     Error::parse(format!(

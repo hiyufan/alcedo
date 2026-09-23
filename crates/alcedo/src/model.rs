@@ -171,7 +171,7 @@ impl Source {
         }
     }
 
-    /// 对海外 / 机房 IP 不友好的平台。部署在境外时这些走 `PV_PROXY_CN`。
+    /// 对海外 / 机房 IP 不友好的平台。部署在境外时这些走 `ALCEDO_PROXY_CN`。
     pub const fn is_cn(self) -> bool {
         !matches!(
             self,

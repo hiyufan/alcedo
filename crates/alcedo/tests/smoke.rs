@@ -5,13 +5,13 @@
 //! 单元测试用的是固定样本，平台改了结构它们照样全绿。
 //!
 //! ```bash
-//! cargo test -p pvcore --test smoke -- --ignored --nocapture
-//! cargo test -p pvcore --test smoke -- --ignored bilibili --nocapture   # 只跑一个
+//! cargo test -p alcedo --test smoke -- --ignored --nocapture
+//! cargo test -p alcedo --test smoke -- --ignored bilibili --nocapture   # 只跑一个
 //! ```
 //!
-//! 国内平台在境外机器上跑需要 `PV_PROXY_CN`，YouTube / X 这些在国内需要 `PV_PROXY`。
+//! 国内平台在境外机器上跑需要 `ALCEDO_PROXY_CN`，YouTube / X 这些在国内需要 `ALCEDO_PROXY`。
 
-use pvcore::{Client, VideoInfo};
+use alcedo::{Client, VideoInfo};
 
 async fn parse(url: &str) -> VideoInfo {
     let client = Client::new().expect("初始化失败");
@@ -96,7 +96,7 @@ async fn youtube() {
     //
     // 这条红了先看是不是出口 IP 被 YouTube 限流了：被限流时所有 InnerTube 客户端
     // 都只下发 HLS 清单，解析器会退化成"能播但没档位"。换个出口或配
-    // PV_YOUTUBE_COOKIE 再跑一次，还是红才是解析器的问题。
+    // ALCEDO_YOUTUBE_COOKIE 再跑一次，还是红才是解析器的问题。
     assert!(
         info.formats.len() > 5,
         "只拿到 {} 个档位（video_url 是否为 manifest.googlevideo.com？那就是被限流了）",
@@ -160,7 +160,7 @@ async fn missing_content_is_classified_as_deleted() {
     println!("得到: [{}] {err}", err.reason);
     assert_ne!(
         err.reason,
-        pvcore::Reason::Parse,
+        alcedo::Reason::Parse,
         "内容不存在被误报成解析器过期，站长会去查一个不存在的问题"
     );
 }
@@ -169,11 +169,11 @@ async fn missing_content_is_classified_as_deleted() {
 #[tokio::test]
 #[ignore = "要联网"]
 async fn bytedance_guest_identity() {
-    let cfg = std::sync::Arc::new(pvcore::Config::from_env());
-    let http = pvcore::http::Http::new(cfg, Some(pvcore::Source::DouYin)).unwrap();
+    let cfg = std::sync::Arc::new(alcedo::Config::from_env());
+    let http = alcedo::http::Http::new(cfg, Some(alcedo::Source::DouYin)).unwrap();
 
-    pvcore::http::identity::forget_bytedance();
-    let first = pvcore::http::identity::bytedance_ttwid(&http).await;
+    alcedo::http::identity::forget_bytedance();
+    let first = alcedo::http::identity::bytedance_ttwid(&http).await;
     let Some(ttwid) = first else {
         panic!("领不到 ttwid——这个端点一直是免签名的，挂了说明抖音改了规则");
     };
@@ -181,7 +181,7 @@ async fn bytedance_guest_identity() {
     assert!(ttwid.len() > 20, "ttwid 看着不像真的: {ttwid}");
 
     // 第二次该走缓存，不再发请求
-    let second = pvcore::http::identity::bytedance_ttwid(&http).await;
+    let second = alcedo::http::identity::bytedance_ttwid(&http).await;
     assert_eq!(
         second.as_deref(),
         Some(ttwid.as_str()),

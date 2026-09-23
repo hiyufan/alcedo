@@ -1,10 +1,10 @@
-//! # pvcore
+//! # alcedo
 //!
 //! 视频平台解析核心：给一条分享链接，返回无水印直链、图集、封面、作者和各档清晰度。
 //!
 //! ```no_run
-//! # async fn demo() -> pvcore::Result<()> {
-//! let client = pvcore::Client::new()?;
+//! # async fn demo() -> alcedo::Result<()> {
+//! let client = alcedo::Client::new()?;
 //! let info = client.parse("https://v.douyin.com/iRNBho6u/").await?;
 //! println!("{} -> {}", info.title, info.video_url);
 //! # Ok(()) }

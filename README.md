@@ -1,12 +1,15 @@
-# pvcore
+# alcedo
 
 视频平台解析核心。给一条分享链接，返回无水印直链、图集、封面、作者和各档清晰度。
+
+> *Alcedo* 是翠鸟属的学名。翠鸟不撒网——它停住、看准、垂直扎进去，
+> 带着要的那一样东西出来。这个项目做的是同一件事。
 
 **35 个平台，纯 Rust，零外部进程依赖。** 不调 yt-dlp、不跑 JS 引擎、不需要 ffmpeg
 就能完成解析（合并音视频轨时才需要 ffmpeg，那是下载阶段的事）。
 
 ```console
-$ pv https://www.youtube.com/watch?v=dQw4w9WgXcQ
+$ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 平台  : YouTube
 标题  : Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)
 作者  : Rick Astley
@@ -30,30 +33,30 @@ $ pv https://www.youtube.com/watch?v=dQw4w9WgXcQ
 | 腾讯视频 · 搜狐视频 · 央视网 | 梨视频 · 逗拍 · 美拍 | Vimeo · Twitch · Reddit |
 | 好看视频 · 新片场 · 六间房 | 全民K歌 | Pinterest · Dailymotion |
 
-`pv --list` 打印完整清单和每个平台认的域名。
+`alcedo --list` 打印完整清单和每个平台认的域名。
 
 ## 用起来
 
 ### 命令行
 
 ```bash
-cargo install --path crates/pvcli      # 装出 `pv`
+cargo install --path crates/alcedo-cli      # 装出 `alcedo`
 
-pv "https://v.douyin.com/xxxxxx/"      # 摘要
-pv --json "https://..."                # JSON
-pv --list                              # 支持的平台
+alcedo "https://v.douyin.com/xxxxxx/"      # 摘要
+alcedo --json "https://..."                # JSON
+alcedo --list                              # 支持的平台
 ```
 
 分享文案可以整段粘进来，链接会自己被抠出来：
 
 ```bash
-pv "7.99 复制打开抖音，看看【作者】的作品 https://v.douyin.com/iRNBho6u/ 很好看"
+alcedo "7.99 复制打开抖音，看看【作者】的作品 https://v.douyin.com/iRNBho6u/ 很好看"
 ```
 
 ### 当库用
 
 ```rust
-let client = pvcore::Client::new()?;          // 构造一次，全程复用（它持有连接池）
+let client = alcedo::Client::new()?;          // 构造一次，全程复用（它持有连接池）
 let info = client.parse("https://v.douyin.com/xxxxxx/").await?;
 
 println!("{} / {}", info.title, info.author.name);
@@ -67,8 +70,8 @@ for f in &info.formats {
 
 ```rust
 match client.parse(url).await {
-    Err(e) if e.reason == pvcore::Reason::Login => { /* 提示站长配 cookie */ }
-    Err(e) if e.reason == pvcore::Reason::Deleted => { /* 内容没了 */ }
+    Err(e) if e.reason == alcedo::Reason::Login => { /* 提示站长配 cookie */ }
+    Err(e) if e.reason == alcedo::Reason::Deleted => { /* 内容没了 */ }
     Err(e) => eprintln!("[{}] {}", e.reason, e),
     Ok(info) => { /* ... */ }
 }
@@ -80,20 +83,20 @@ match client.parse(url).await {
 
 ## 配置
 
-全部走环境变量。`PV_*` 是正式名字，`PARSE_VIDEO_*` 同样认（兼容 Python 版的部署脚本）。
+全部走环境变量。`ALCEDO_*` 是正式名字，`PARSE_VIDEO_*` 同样认（兼容 Python 版的部署脚本）。
 
 | 变量 | 作用 |
 | --- | --- |
-| `PV_PROXY` | 所有平台的代理，如 `http://127.0.0.1:7890`、`socks5://...` |
-| `PV_PROXY_CN` | **只**给国内平台用的代理。境外部署时抖音 / 小红书这些必须走它 |
-| `PV_BILI_COOKIE` | B 站登录 cookie，不配只能拿到 720p |
-| `PV_XHS_COOKIE` | 小红书登录 cookie，机房 IP 基本必配 |
-| `PV_DOUYIN_COOKIE` / `PV_YOUTUBE_COOKIE` | 同上，按需 |
-| `PV_REQUEST_TIMEOUT` | 单请求超时秒数，默认 20 |
-| `PV_TOTAL_TIMEOUT` | 整次解析超时秒数，默认 45 |
-| `PV_MAX_BODY_BYTES` | 响应体上限，默认 16 MiB |
-| `PV_SSRF_DNS=0` | 关掉 DNS 层的内网地址拦截（只有自建内网镜像时才需要） |
-| `PV_SIGNER_<平台>` | 外部签名器，见下文。如 `PV_SIGNER_DOUYIN=http://127.0.0.1:9000/sign` |
+| `ALCEDO_PROXY` | 所有平台的代理，如 `http://127.0.0.1:7890`、`socks5://...` |
+| `ALCEDO_PROXY_CN` | **只**给国内平台用的代理。境外部署时抖音 / 小红书这些必须走它 |
+| `ALCEDO_BILI_COOKIE` | B 站登录 cookie，不配只能拿到 720p |
+| `ALCEDO_XHS_COOKIE` | 小红书登录 cookie，机房 IP 基本必配 |
+| `ALCEDO_DOUYIN_COOKIE` / `ALCEDO_YOUTUBE_COOKIE` | 同上，按需 |
+| `ALCEDO_REQUEST_TIMEOUT` | 单请求超时秒数，默认 20 |
+| `ALCEDO_TOTAL_TIMEOUT` | 整次解析超时秒数，默认 45 |
+| `ALCEDO_MAX_BODY_BYTES` | 响应体上限，默认 16 MiB |
+| `ALCEDO_SSRF_DNS=0` | 关掉 DNS 层的内网地址拦截（只有自建内网镜像时才需要） |
+| `ALCEDO_SIGNER_<平台>` | 外部签名器，见下文。如 `ALCEDO_SIGNER_DOUYIN=http://127.0.0.1:9000/sign` |
 
 ## 结果长什么样
 
@@ -155,8 +158,8 @@ match client.parse(url).await {
 外部程序或服务里，算法变了换那个，不用碰也不用重新编译本仓库：
 
 ```bash
-PV_SIGNER_DOUYIN=http://127.0.0.1:9000/sign   # 常驻服务（推荐）
-PV_SIGNER_DOUYIN=cmd:/opt/pv/douyin-signer    # 子进程，stdin/stdout 走 JSON
+ALCEDO_SIGNER_DOUYIN=http://127.0.0.1:9000/sign   # 常驻服务（推荐）
+ALCEDO_SIGNER_DOUYIN=cmd:/opt/alcedo/douyin-signer    # 子进程，stdin/stdout 走 JSON
 ```
 
 协议（两种传输一样）：
@@ -202,23 +205,23 @@ object，解析路径上一次虚调用都没有。
 ## 实测延迟
 
 同一台机器、同一条链接、同一个进程内连续解析 6 次，对比原 Python 版
-（`cargo run --release -p pvcore --example bench -- <url> 6`）：
+（`cargo run --release -p alcedo --example bench -- <url> 6`）：
 
-| 链接 | Python 中位 | pvcore 中位 | |
+| 链接 | Python 中位 | alcedo 中位 | |
 | --- | --- | --- | --- |
 | B 站 `BV1GJ411x7h7` | 1139 ms | **256 ms** | 快 4.4×，档位 3 → 6 |
 | 梨视频 `detail_1742158` | 120 ms | 216 ms | **更慢**，见下 |
 
 B 站那条差距主要来自架构：Python 版要另起一个 yt-dlp 进程才能列出高清档位，
-pvcore 直接向 `playurl` 要 DASH。连接复用也看得见——首次 412 ms（含 DNS + TLS
+alcedo 直接向 `playurl` 要 DASH。连接复用也看得见——首次 412 ms（含 DNS + TLS
 握手），之后稳定在 243–275 ms。
 
 梨视频这条我们**更慢，而且是故意的**：平台的 `videoStatus` 接口不返回标题，
-pvcore 额外并发拉一次详情页（只读前 24 KB）把标题补上，Python 版则直接给一个
+alcedo 额外并发拉一次详情页（只读前 24 KB）把标题补上，Python 版则直接给一个
 空标题。多出来的时间换的是一个能用的结果。
 
 > 网络抖动会盖过不少差异，这几个数字是同一时段连续跑出来的，换时间/换网络会浮动。
-> 想自己复现：`cargo run --release -p pvcore --example bench -- <url> 10`。
+> 想自己复现：`cargo run --release -p alcedo --example bench -- <url> 10`。
 
 ## 和同类项目比
 
@@ -226,7 +229,7 @@ pvcore 额外并发拉一次详情页（只读前 24 KB）把标题补上，Pyth
 
 | | B站 | YouTube | AcFun | Vimeo |
 | --- | --- | --- | --- | --- |
-| **pvcore** | **430 ms** | **982 ms** | **412 ms** | 1485 ms |
+| **alcedo** | **430 ms** | **982 ms** | **412 ms** | 1485 ms |
 | yt-dlp (Python) | 1770 ms | 4124 ms | — | — |
 | lux (Go, v0.24.1) | 4910 ms | ✗ 崩溃 | ✗ panic | ✗ 崩溃 |
 
@@ -297,10 +300,10 @@ raw-dylib 的 crate 会链接失败。）
 
 ### 加一个平台
 
-1. `crates/pvcore/src/model.rs` 的 `Source` 加一项，补 `as_str` / `display_name` /
+1. `crates/alcedo/src/model.rs` 的 `Source` 加一项，补 `as_str` / `display_name` /
    `is_cn`
-2. `crates/pvcore/src/registry.rs` 的 `DOMAINS` 登记域名
-3. 写 `crates/pvcore/src/parsers/<name>.rs`，导出
+2. `crates/alcedo/src/registry.rs` 的 `DOMAINS` 登记域名
+3. 写 `crates/alcedo/src/parsers/<name>.rs`，导出
    `pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo>`
 4. `parsers/mod.rs` 里 `pub mod` + `dispatch` 加分支
 5. 用真实响应造一份最小 JSON/HTML 写单元测试——**不要**在单测里发网络请求

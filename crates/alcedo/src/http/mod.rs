@@ -72,26 +72,26 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 从环境变量读。`PV_*` 是新名字，`PARSE_VIDEO_*` 是 Python 版留下的，
+    /// 从环境变量读。`ALCEDO_*` 是新名字，`PARSE_VIDEO_*` 是 Python 版留下的，
     /// 两个都认，迁移期不用改部署脚本。
     pub fn from_env() -> Self {
         let d = Config::default();
         Config {
-            proxy: env_any(&["PV_PROXY", "PARSE_VIDEO_PROXY"]),
-            proxy_cn: env_any(&["PV_PROXY_CN", "PARSE_VIDEO_PROXY_CN"]),
-            connect_timeout: env_secs("PV_CONNECT_TIMEOUT", d.connect_timeout),
-            request_timeout: env_secs("PV_REQUEST_TIMEOUT", d.request_timeout),
-            total_timeout: env_secs("PV_TOTAL_TIMEOUT", d.total_timeout),
-            max_redirects: env_num("PV_MAX_REDIRECTS", d.max_redirects),
-            max_body_bytes: env_num("PV_MAX_BODY_BYTES", d.max_body_bytes),
+            proxy: env_any(&["ALCEDO_PROXY", "PARSE_VIDEO_PROXY"]),
+            proxy_cn: env_any(&["ALCEDO_PROXY_CN", "PARSE_VIDEO_PROXY_CN"]),
+            connect_timeout: env_secs("ALCEDO_CONNECT_TIMEOUT", d.connect_timeout),
+            request_timeout: env_secs("ALCEDO_REQUEST_TIMEOUT", d.request_timeout),
+            total_timeout: env_secs("ALCEDO_TOTAL_TIMEOUT", d.total_timeout),
+            max_redirects: env_num("ALCEDO_MAX_REDIRECTS", d.max_redirects),
+            max_body_bytes: env_num("ALCEDO_MAX_BODY_BYTES", d.max_body_bytes),
             ssrf_enforce: !matches!(
-                env_any(&["PV_SSRF_DNS", "PARSE_VIDEO_SSRF_DNS"]).as_deref(),
+                env_any(&["ALCEDO_SSRF_DNS", "PARSE_VIDEO_SSRF_DNS"]).as_deref(),
                 Some("0")
             ),
-            bilibili_cookie: env_any(&["PV_BILI_COOKIE", "PARSE_VIDEO_BILI_COOKIE"]),
-            xhs_cookie: env_any(&["PV_XHS_COOKIE", "PARSE_VIDEO_XHS_COOKIE"]),
-            douyin_cookie: env_any(&["PV_DOUYIN_COOKIE", "PARSE_VIDEO_DOUYIN_COOKIE"]),
-            youtube_cookie: env_any(&["PV_YOUTUBE_COOKIE", "PARSE_VIDEO_YOUTUBE_COOKIE"]),
+            bilibili_cookie: env_any(&["ALCEDO_BILI_COOKIE", "PARSE_VIDEO_BILI_COOKIE"]),
+            xhs_cookie: env_any(&["ALCEDO_XHS_COOKIE", "PARSE_VIDEO_XHS_COOKIE"]),
+            douyin_cookie: env_any(&["ALCEDO_DOUYIN_COOKIE", "PARSE_VIDEO_DOUYIN_COOKIE"]),
+            youtube_cookie: env_any(&["ALCEDO_YOUTUBE_COOKIE", "PARSE_VIDEO_YOUTUBE_COOKIE"]),
         }
     }
 

@@ -35,14 +35,14 @@ jobs:
         # GitHub 的出口是机房 IP，国内平台多半会被挡——配了代理就用，
         # 没配也照跑，至少海外平台的结果是有效的
         env:
-          PV_PROXY: ${{ secrets.PV_PROXY }}
-          PV_PROXY_CN: ${{ secrets.PV_PROXY_CN }}
-          PV_BILI_COOKIE: ${{ secrets.PV_BILI_COOKIE }}
-          PV_XHS_COOKIE: ${{ secrets.PV_XHS_COOKIE }}
-          PV_YOUTUBE_COOKIE: ${{ secrets.PV_YOUTUBE_COOKIE }}
+          ALCEDO_PROXY: ${{ secrets.ALCEDO_PROXY }}
+          ALCEDO_PROXY_CN: ${{ secrets.ALCEDO_PROXY_CN }}
+          ALCEDO_BILI_COOKIE: ${{ secrets.ALCEDO_BILI_COOKIE }}
+          ALCEDO_XHS_COOKIE: ${{ secrets.ALCEDO_XHS_COOKIE }}
+          ALCEDO_YOUTUBE_COOKIE: ${{ secrets.ALCEDO_YOUTUBE_COOKIE }}
         run: |
           set -o pipefail
-          cargo test -p pvcore --test smoke -- \
+          cargo test -p alcedo --test smoke -- \
             --ignored --nocapture --test-threads=2 ${{ inputs.filter }} \
             2>&1 | tee smoke.log
 
@@ -64,8 +64,8 @@ jobs:
               `[${new Date().toISOString().slice(0, 16)}] 定时冒烟测试红了。`,
               '',
               '**先判断是哪一类**：',
-              '- 只有国内平台红 → 多半是 GitHub 机房 IP 被挡，看看 `PV_PROXY_CN` 还有效吗',
-              '- 只有 YouTube 红 → 出口 IP 被判机器人，换出口或配 `PV_YOUTUBE_COOKIE`',
+              '- 只有国内平台红 → 多半是 GitHub 机房 IP 被挡，看看 `ALCEDO_PROXY_CN` 还有效吗',
+              '- 只有 YouTube 红 → 出口 IP 被判机器人，换出口或配 `ALCEDO_YOUTUBE_COOKIE`',
               '- 单个平台红、报错是 `[parse]` → **这才是真的改版了，要改解析器**',
               '',
               '```',

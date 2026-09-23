@@ -15,10 +15,10 @@ cargo fmt --all
 
 ## 加一个平台
 
-1. `crates/pvcore/src/model.rs` 的 `Source` 加一项，补 `as_str` / `display_name` /
+1. `crates/alcedo/src/model.rs` 的 `Source` 加一项，补 `as_str` / `display_name` /
    `is_cn`，并加进 `Source::ALL`
-2. `crates/pvcore/src/registry.rs` 的 `DOMAINS` 登记域名
-3. 写 `crates/pvcore/src/parsers/<name>.rs`，导出
+2. `crates/alcedo/src/registry.rs` 的 `DOMAINS` 登记域名
+3. 写 `crates/alcedo/src/parsers/<name>.rs`，导出
    `pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo>`
 4. `parsers/mod.rs` 里 `pub mod` + `dispatch` 加分支
 5. 写单元测试，用真实响应造一份**最小**样本
@@ -64,7 +64,7 @@ refactor: 收敛重复的清晰度标签逻辑
 先跑冒烟测试确认是真挂了还是自己网络的问题：
 
 ```bash
-cargo test -p pvcore --test smoke -- --ignored <平台名> --nocapture
+cargo test -p alcedo --test smoke -- --ignored <平台名> --nocapture
 ```
 
 再看报错的 `reason`：
@@ -73,5 +73,5 @@ cargo test -p pvcore --test smoke -- --ignored <平台名> --nocapture
 | --- | --- |
 | `parse` | **真改版了**，要改解析器 |
 | `blocked` | 出口 IP 被风控，配代理或换出口 |
-| `login` | 平台开始要登录，配对应的 `PV_*_COOKIE` |
+| `login` | 平台开始要登录，配对应的 `ALCEDO_*_COOKIE` |
 | `deleted` | 就是这条内容没了，换个链接再试 |

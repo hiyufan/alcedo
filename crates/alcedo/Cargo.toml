@@ -1,5 +1,5 @@
 [package]
-name = "pvcore"
+name = "alcedo"
 description = "高性能视频平台解析核心：抖音 / 小红书 / 快手 / B站 / 微博 / YouTube / TikTok 等"
 version.workspace = true
 edition.workspace = true

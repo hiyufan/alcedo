@@ -231,7 +231,7 @@ fn check_playability(resp: &Value) -> Result<()> {
             if reason.contains("not a bot") || reason.contains("confirm you're not") {
                 // 出口 IP 被判成机器人。换个客户端常常就过了，真过不了才需要 cookie
                 Error::blocked(format!(
-                    "YouTube 要求确认服务器 IP 不是机器人（{reason}），换个出口或配置 PV_YOUTUBE_COOKIE"
+                    "YouTube 要求确认服务器 IP 不是机器人（{reason}），换个出口或配置 ALCEDO_YOUTUBE_COOKIE"
                 ))
             } else if reason.contains("age") || reason.contains("Sign in to confirm your age") {
                 Error::restricted(format!("年龄限制视频，需要登录：{reason}"))

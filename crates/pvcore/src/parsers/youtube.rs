@@ -65,12 +65,14 @@ static CLIENTS: &[ClientSpec] = &[
     },
 ];
 
+/// 解析一条YouTube分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let id =
         video_id_from_url(url).ok_or_else(|| Error::unsupported("链接里没有 YouTube 视频 ID"))?;
     parse_id(http, &id).await
 }
 
+/// 已知YouTube作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     if !is_valid_id(video_id) {
         return Err(Error::unsupported(format!(

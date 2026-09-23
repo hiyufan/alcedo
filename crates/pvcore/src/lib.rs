@@ -50,10 +50,12 @@ impl Client {
         })
     }
 
+    /// 用指定配置建一个，绕过环境变量。
     pub fn with_config(cfg: Config) -> Self {
         Self { cfg: Arc::new(cfg) }
     }
 
+    /// 当前生效的配置。
     pub fn config(&self) -> &Config {
         &self.cfg
     }

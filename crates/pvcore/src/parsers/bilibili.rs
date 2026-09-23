@@ -23,11 +23,13 @@ const REFERER: &str = "https://www.bilibili.com/";
 static BUVID: RwLock<Option<(String, Instant)>> = RwLock::new(None);
 const BUVID_TTL: Duration = Duration::from_secs(3600);
 
+/// 解析一条哔哩哔哩分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let bvid = bvid_from_url(http, url).await?;
     parse_id(http, &bvid).await
 }
 
+/// 已知哔哩哔哩作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     let http = http.clone().with_fixed_ua(ua::DESKTOP_FIXED);
     let cookie = ensure_buvid(&http).await;

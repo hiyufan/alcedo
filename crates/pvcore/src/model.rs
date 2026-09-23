@@ -15,45 +15,81 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Source {
     // ---- 国内短视频 / 社区 ----
+    /// 抖音 / 抖音火山版
     DouYin,
+    /// 快手
     KuaiShou,
+    /// 皮皮虾
     PiPiXia,
+    /// 微博
     WeiBo,
+    /// 微视
     WeiShi,
+    /// 绿洲（微博旗下）
     LvZhou,
+    /// 最右
     ZuiYou,
+    /// 度小视（原全民小视频）
     QuanMin,
+    /// 西瓜视频
     XiGua,
+    /// 梨视频
     LiShiPin,
+    /// 皮皮搞笑
     PiPiGaoXiao,
+    /// 虎牙
     HuYa,
+    /// AcFun（A 站）
     AcFun,
+    /// 逗拍
     DouPai,
+    /// 美拍
     MeiPai,
+    /// 全民 K 歌
     QuanMinKGe,
+    /// 六间房
     SixRoom,
+    /// 新片场
     XinPianChang,
+    /// 好看视频
     HaoKan,
+    /// 哔哩哔哩
     BiliBili,
+    /// 小红书
     RedBook,
+    /// 腾讯视频
     QQVideo,
+    /// 搜狐视频
     Sohu,
+    /// 央视网
     CCTV,
     // ---- 海外 ----
+    /// X（原 Twitter）
     Twitter,
+    /// YouTube
     YouTube,
+    /// TikTok
     TikTok,
+    /// Instagram
     Instagram,
+    /// Threads
     Threads,
+    /// Vimeo
     Vimeo,
+    /// Facebook
     Facebook,
+    /// Twitch（Clip 和录像）
     Twitch,
+    /// Reddit
     Reddit,
+    /// Pinterest
     Pinterest,
+    /// Dailymotion
     DailyMotion,
 }
 
 impl Source {
+    /// 对外 JSON 里 `source` 字段的取值。改动会破坏前端。
     pub const fn as_str(self) -> &'static str {
         match self {
             Source::DouYin => "douyin",
@@ -261,6 +297,7 @@ pub struct Author {
 }
 
 impl Author {
+    /// 三个字段都给。
     pub fn new(uid: impl Into<String>, name: impl Into<String>, avatar: impl Into<String>) -> Self {
         Self {
             uid: uid.into(),
@@ -269,6 +306,7 @@ impl Author {
         }
     }
 
+    /// 只知道昵称时用。
     pub fn named(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -280,6 +318,7 @@ impl Author {
 /// 图集中的一张图。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
+    /// 图片地址
     pub url: String,
     /// 实况照片 (Live Photo) 对应的短视频地址
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -287,6 +326,7 @@ pub struct Image {
 }
 
 impl Image {
+    /// 一张普通图片（不带实况视频）。
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
@@ -358,6 +398,7 @@ impl Format {
         }
     }
 
+    /// 一档可直接下载的 mp4。
     pub fn direct(label: impl Into<String>, url: impl Into<String>, height: u32) -> Self {
         Self {
             label: label.into(),
@@ -404,6 +445,7 @@ pub struct VideoInfo {
     /// 图集
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<Image>,
+    /// 作者信息
     #[serde(default)]
     pub author: Author,
 
@@ -416,8 +458,10 @@ pub struct VideoInfo {
     /// 时长（秒），未知为 0
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub duration: f64,
+    /// 默认档的宽，未知为 0
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub width: u32,
+    /// 默认档的高，未知为 0
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub height: u32,
     /// 其余清晰度档位
@@ -442,6 +486,7 @@ impl VideoInfo {
         self.video_url.is_empty() && !self.images.is_empty()
     }
 
+    /// 加一个访问直链时必须附带的请求头。
     pub fn set_header(&mut self, k: impl Into<String>, v: impl Into<String>) {
         self.video_headers.insert(k.into(), v.into());
     }

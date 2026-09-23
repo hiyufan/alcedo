@@ -49,6 +49,7 @@ impl Reason {
         }
     }
 
+    /// 机器可读的原因标识，就是 JSON 里 `reason` 的取值。
     pub const fn as_str(self) -> &'static str {
         match self {
             Reason::Deleted => "deleted",
@@ -83,12 +84,14 @@ impl fmt::Display for Reason {
 /// 解析失败。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    /// 失败原因，决定给用户看的文案
     pub reason: Reason,
     /// 补充细节，可能为空；会拼在用户文案后面的括号里
     pub detail: String,
 }
 
 impl Error {
+    /// 带细节地构造。
     pub fn new(reason: Reason, detail: impl Into<String>) -> Self {
         Self {
             reason,
@@ -96,6 +99,7 @@ impl Error {
         }
     }
 
+    /// 只给原因，不带细节。
     pub fn bare(reason: Reason) -> Self {
         Self {
             reason,
@@ -103,18 +107,23 @@ impl Error {
         }
     }
 
+    /// 内容已删除 / 私密 / 链接过期。
     pub fn deleted(detail: impl Into<String>) -> Self {
         Self::new(Reason::Deleted, detail)
     }
+    /// 平台要求登录，需要站长配 cookie。
     pub fn login(detail: impl Into<String>) -> Self {
         Self::new(Reason::Login, detail)
     }
+    /// 被风控 / 限流 / 拒绝访问。
     pub fn blocked(detail: impl Into<String>) -> Self {
         Self::new(Reason::Blocked, detail)
     }
+    /// 不认识这个链接。
     pub fn unsupported(detail: impl Into<String>) -> Self {
         Self::new(Reason::Unsupported, detail)
     }
+    /// 平台不对外提供这条内容的数据。
     pub fn restricted(detail: impl Into<String>) -> Self {
         Self::new(Reason::Restricted, detail)
     }
@@ -122,6 +131,7 @@ impl Error {
     pub fn parse(detail: impl Into<String>) -> Self {
         Self::new(Reason::Parse, detail)
     }
+    /// 解析成功但什么都没拿到。
     pub fn empty() -> Self {
         Self::bare(Reason::Empty)
     }
@@ -139,6 +149,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// 本 crate 统一的 `Result`。
 pub type Result<T> = std::result::Result<T, Error>;
 
 // ---------------------------------------------------------------- 归类

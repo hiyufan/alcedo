@@ -7,10 +7,12 @@ use crate::http::Http;
 use crate::model::VideoInfo;
 use crate::util;
 
+/// 解析一条腾讯视频分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &vid_from_url(url)?).await
 }
 
+/// 已知腾讯视频作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, vid: &str) -> Result<VideoInfo> {
     if vid.is_empty() {
         return Err(Error::unsupported("视频 ID 为空"));

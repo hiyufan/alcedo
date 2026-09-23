@@ -18,6 +18,7 @@ use crate::util;
 /// 网页版 Instagram 自己用的 app id，公开值。
 const IG_APP_ID: &str = "936619743392459";
 
+/// 解析一条Instagram分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let code = shortcode_from_url(url)
         .ok_or_else(|| Error::unsupported("链接里没有 Instagram 的作品 code"))?;
@@ -35,6 +36,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     og_fallback(http, url, "Instagram").await
 }
 
+/// 解析一条 Threads 帖子链接（和 Instagram 同一套后端）。
 pub async fn parse_threads(http: &Http, url: &str) -> Result<VideoInfo> {
     // Threads 和 Instagram 同一套后端，post code 也是同一种编码
     if let Some(code) = shortcode_from_url(url) {

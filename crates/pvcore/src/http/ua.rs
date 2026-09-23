@@ -37,9 +37,13 @@ pub const DESKTOP: &[&str] = &[
 pub const DESKTOP_FIXED: &str = DESKTOP[0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// UA 池的分组。
 pub enum Platform {
+    /// iOS Safari
     Ios,
+    /// Android Chrome
     Android,
+    /// 桌面 Chrome / Safari
     Desktop,
 }
 

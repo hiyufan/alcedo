@@ -11,6 +11,7 @@ use crate::http::{Http, Req};
 use crate::model::{short_side, Author, Format, Image, VideoInfo};
 use crate::util;
 
+/// 解析一条快手分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     // 第一跳：拿 Location + cookie
     let first = http

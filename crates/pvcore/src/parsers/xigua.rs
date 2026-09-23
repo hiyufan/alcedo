@@ -7,6 +7,7 @@ use crate::http::{ua, Http, Req};
 use crate::model::{Author, VideoInfo};
 use crate::util;
 
+/// 解析一条西瓜视频分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let host = util::host_of(url).unwrap_or_default();
 
@@ -27,6 +28,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &id).await
 }
 
+/// 已知西瓜视频作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     // 注意：地址里 video_id 后面不能有斜杠，否则返回的结构不一样
     let api = format!(

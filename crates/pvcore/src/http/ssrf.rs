@@ -113,6 +113,7 @@ pub struct SafeResolver {
 }
 
 impl SafeResolver {
+    /// `enforce = false` 时只拦字面 IP 和本地主机名，不做 DNS 校验。
     pub fn new(enforce: bool) -> Self {
         Self {
             cache: Arc::new(Mutex::new(Vec::new())),

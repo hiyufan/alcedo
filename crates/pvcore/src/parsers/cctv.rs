@@ -10,12 +10,14 @@ use crate::http::Http;
 use crate::model::{Author, VideoInfo};
 use crate::util;
 
+/// 解析一条央视网分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let html = http.get_text(url).await?;
     let guid = guid_from_html(&html)?;
     parse_id(http, &guid).await
 }
 
+/// 已知央视网作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, guid: &str) -> Result<VideoInfo> {
     let json = http
         .get_json(&format!(

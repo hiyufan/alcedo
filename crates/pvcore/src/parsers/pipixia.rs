@@ -10,6 +10,7 @@ use crate::http::Http;
 use crate::model::{Author, Image, VideoInfo};
 use crate::util;
 
+/// 解析一条皮皮虾分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let location = http.resolve_redirect(url).await?;
     let id = location
@@ -22,6 +23,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &id).await
 }
 
+/// 已知皮皮虾作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let api = format!(
         "https://api.pipix.com/bds/cell/cell_comment/?offset=0&cell_type=1&api_version=1\

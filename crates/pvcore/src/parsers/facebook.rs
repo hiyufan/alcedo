@@ -18,6 +18,7 @@ use crate::util;
 const CRAWLER_UA: &str =
     "Mozilla/5.0 (compatible; facebookexternalhit/1.1; +http://www.facebook.com/externalhit_uatext.php)";
 
+/// 解析一条Facebook分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     // fb.watch / fb.com 都是短链
     let host = util::host_of(url).unwrap_or_default();

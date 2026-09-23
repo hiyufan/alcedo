@@ -15,6 +15,7 @@ use crate::util;
 
 const WEB_REFERER: &str = "https://www.tiktok.com/";
 
+/// 解析一条TikTok分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let host = util::host_of(url).unwrap_or_default();
 
@@ -29,6 +30,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     Ok(info)
 }
 
+/// 已知TikTok作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     if !id.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Error::unsupported("TikTok 的作品 ID 应当是一串数字"));

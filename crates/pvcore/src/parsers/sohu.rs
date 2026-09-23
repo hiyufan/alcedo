@@ -10,10 +10,12 @@ use crate::http::Http;
 use crate::model::{Author, VideoInfo};
 use crate::util;
 
+/// 解析一条搜狐视频分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &vid_from_url(url)?).await
 }
 
+/// 已知搜狐视频作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, vid: &str) -> Result<VideoInfo> {
     let api = format!(
         "https://api.tv.sohu.com/v4/video/info/{vid}.json\

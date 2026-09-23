@@ -7,6 +7,7 @@ use crate::http::{ua, Http, Req};
 use crate::model::{Author, Format, VideoInfo};
 use crate::util;
 
+/// 解析一条新片场分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let http = http.clone().with_ua(ua::Platform::Desktop);
 

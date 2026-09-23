@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::http::Http;
 use crate::model::{Author, VideoInfo};
 
+/// 解析一条绿洲分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let html = http.get_text(url).await?;
     build(&html)

@@ -30,19 +30,25 @@ pub struct Config {
     pub proxy: Option<String>,
     /// 只给国内平台用的代理（境外部署时抖音 / 小红书这些必须走它）
     pub proxy_cn: Option<String>,
+    /// 建立连接的上限
     pub connect_timeout: Duration,
     /// 单个请求的上限
     pub request_timeout: Duration,
     /// 一次完整解析的上限
     pub total_timeout: Duration,
+    /// 短链跳转最多跟几跳
     pub max_redirects: usize,
     /// 响应体上限，防着对面返回一个超大页面把内存吃光
     pub max_body_bytes: usize,
     /// DNS 层的内网地址拦截
     pub ssrf_enforce: bool,
+    /// B 站登录 cookie，能拿到更高清晰度
     pub bilibili_cookie: Option<String>,
+    /// 小红书登录 cookie，机房 IP 基本必配
     pub xhs_cookie: Option<String>,
+    /// 抖音 cookie；配了就不再去领匿名 ttwid
     pub douyin_cookie: Option<String>,
+    /// YouTube cookie，撞上机器人校验时需要
     pub youtube_cookie: Option<String>,
 }
 
@@ -209,6 +215,7 @@ pub struct Req {
 }
 
 impl Req {
+    /// 一个 GET 请求。
     pub fn get(url: impl Into<String>) -> Self {
         Self {
             method: Method::GET,
@@ -221,6 +228,7 @@ impl Req {
         }
     }
 
+    /// 一个 POST 请求。
     pub fn post(url: impl Into<String>) -> Self {
         Self {
             method: Method::POST,
@@ -228,11 +236,13 @@ impl Req {
         }
     }
 
+    /// 加一个请求头。
     pub fn header(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
         self.headers.push((k.into(), v.into()));
         self
     }
 
+    /// 批量加请求头。
     pub fn headers<I, K, V>(mut self, it: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -244,10 +254,12 @@ impl Req {
         self
     }
 
+    /// 设 `Referer`。多数平台的 CDN 会校验它。
     pub fn referer(self, v: impl Into<String>) -> Self {
         self.header("Referer", v)
     }
 
+    /// 加一个 cookie。
     pub fn cookie(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
         self.cookies.push((k.into(), v.into()));
         self
@@ -258,16 +270,19 @@ impl Req {
         self.header("Cookie", raw)
     }
 
+    /// 设请求体。
     pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
         self.body = Some(body.into());
         self
     }
 
+    /// JSON 请求体，顺带设好 `Content-Type`。
     pub fn json_body(self, value: &serde_json::Value) -> Self {
         let raw = serde_json::to_vec(value).unwrap_or_default();
         self.header("Content-Type", "application/json").body(raw)
     }
 
+    /// 表单请求体，顺带设好 `Content-Type`。
     pub fn form_body(self, raw: impl Into<Vec<u8>>) -> Self {
         self.header("Content-Type", "application/x-www-form-urlencoded")
             .body(raw)
@@ -295,9 +310,11 @@ impl Req {
 
 /// 一次响应。body 已经读完并按 charset 解码。
 pub struct Resp {
+    /// HTTP 状态码
     pub status: StatusCode,
     /// 跟完重定向之后的最终地址
     pub url: String,
+    /// 响应头
     pub headers: HeaderMap,
     body: Vec<u8>,
 }
@@ -337,10 +354,12 @@ impl Resp {
         }
     }
 
+    /// 原始字节。
     pub fn bytes(&self) -> &[u8] {
         &self.body
     }
 
+    /// 按 JSON 解析正文。
     pub fn json(&self) -> Result<serde_json::Value> {
         // 有几家接口会在 JSON 前面塞 BOM 或者 JSONP 包装, 交给调用方处理,
         // 这里只负责最直白的一种
@@ -353,6 +372,7 @@ impl Resp {
         })
     }
 
+    /// 取一个响应头。
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).and_then(|v| v.to_str().ok())
     }
@@ -370,6 +390,7 @@ impl Resp {
         }
     }
 
+    /// 非 2xx / 3xx 时按状态码归类成错误。
     pub fn error_for_status(&self) -> Result<()> {
         if self.status.is_success() || self.status.is_redirection() {
             Ok(())
@@ -409,6 +430,7 @@ pub struct Http {
 }
 
 impl Http {
+    /// 建一个句柄。会按平台挑代理，并定下本次解析用的 UA。
     pub fn new(cfg: Arc<Config>, source: Option<Source>) -> Result<Self> {
         let client = client_for(&cfg, cfg.proxy_for(source))?;
         Ok(Self {
@@ -419,10 +441,12 @@ impl Http {
         })
     }
 
+    /// 当前配置。
     pub fn config(&self) -> &Config {
         &self.cfg
     }
 
+    /// 这个句柄服务于哪个平台。
     pub fn source(&self) -> Option<Source> {
         self.source
     }
@@ -438,6 +462,7 @@ impl Http {
         self
     }
 
+    /// 指定一个固定 UA（需要和上次请求保持一致时用）。
     pub fn with_fixed_ua(mut self, agent: &'static str) -> Self {
         self.user_agent = agent;
         self

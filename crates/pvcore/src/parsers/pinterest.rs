@@ -11,6 +11,7 @@ use crate::model::{Author, Image, VideoInfo};
 use crate::parsers::meta;
 use crate::util;
 
+/// 解析一条Pinterest分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     // pin.it 是短链
     let url = if util::host_of(url).is_some_and(|h| h == "pin.it") {

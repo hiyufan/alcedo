@@ -11,6 +11,7 @@ use crate::http::{Http, Req};
 use crate::model::{Author, Image, VideoInfo};
 use crate::util;
 
+/// 解析一条微博分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     if url.contains("show?fid=") {
         return parse_id(http, &util::query_param(url, "fid")?).await;
@@ -33,6 +34,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
 }
 
 /// 微博视频（oid 形式）。
+/// 已知微博作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     let api = format!("https://h5.video.weibo.com/api/component?page=/show/{video_id}");
     let body = format!(r#"data={{"Component_Play_Playinfo":{{"oid":"{video_id}"}}}}"#);

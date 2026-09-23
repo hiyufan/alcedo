@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 use crate::http::{ua, Http, Req};
 use crate::model::{Author, VideoInfo};
 
+/// 解析一条美拍分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let resp = http
         .send(Req::get(url).header("User-Agent", ua::pick(ua::Platform::Desktop)))

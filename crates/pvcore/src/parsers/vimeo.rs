@@ -7,12 +7,14 @@ use crate::http::Http;
 use crate::model::{Author, Format, VideoInfo};
 use crate::util;
 
+/// 解析一条Vimeo分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let id =
         video_id_from_url(url).ok_or_else(|| Error::unsupported("链接里没有 Vimeo 的视频 ID"))?;
     parse_id(http, &id).await
 }
 
+/// 已知Vimeo作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     if !id.bytes().all(|b| b.is_ascii_digit()) || id.is_empty() {
         return Err(Error::unsupported("Vimeo 的视频 ID 应当是一串数字"));

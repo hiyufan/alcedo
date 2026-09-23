@@ -48,6 +48,9 @@ debug = 1
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
+# 这是个要发到 crates.io 的库，公开 API 没文档等于没法用。
+# 一次补齐之后开着，新增的公开项漏写文档 CI 会拦住。
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

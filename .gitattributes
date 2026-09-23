@@ -1,0 +1,21 @@
+# 行尾符统一。
+#
+# 没有这个文件时，Windows 上 checkout 会把 LF 换成 CRLF，提交回去又换回 LF——
+# 只要有人的 core.autocrlf 配置不一样，就会出现"整个文件都变了"的假 diff，
+# review 时根本看不出真正改了什么。这里把规则钉死在仓库里，不依赖每个人的本地配置。
+* text=auto eol=lf
+
+# 二进制，别碰
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.mp4   binary
+*.zip   binary
+*.exe   binary
+
+# GitHub 语言统计：生成物和测试样本不该算进"项目主要语言"
+Cargo.lock      linguist-generated=true
+*.md            linguist-documentation=true

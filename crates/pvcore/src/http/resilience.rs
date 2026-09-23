@@ -152,6 +152,7 @@ pub enum Decision {
 }
 
 impl Governor {
+    /// 按给定参数建一个闸门集合。
     pub const fn new(limits: Limits) -> Self {
         Self {
             gates: Mutex::new(Vec::new()),

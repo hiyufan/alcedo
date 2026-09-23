@@ -14,6 +14,7 @@ use crate::model::{short_side, Author, Format, Image, Source, VideoInfo};
 use crate::parsers::signer::Signer;
 use crate::util;
 
+/// 解析一条抖音分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let host = util::host_of(url).unwrap_or_default();
 
@@ -38,6 +39,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &video_id).await
 }
 
+/// 已知抖音作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     let data = match slides_info(http, video_id).await? {
         Some(d) => d,

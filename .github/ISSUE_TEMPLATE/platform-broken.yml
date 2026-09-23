@@ -1,0 +1,91 @@
+name: 某个平台解析不了
+description: 以前能用、现在不行，或者某个平台一直失败
+labels: [platform]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **先跑一下这个**，它会告诉你是平台改版了还是你的网络问题：
+
+        ```bash
+        pv --json "你的链接"
+        ```
+
+        看返回里的 `reason`：
+
+        | reason | 含义 | 该谁处理 |
+        | --- | --- | --- |
+        | `parse` | 平台改版了 | **这个 issue 有用，请继续填** |
+        | `blocked` | 出口 IP 被风控 | 配 `PV_PROXY_CN` 或换出口 |
+        | `login` | 平台开始要登录 | 配对应的 `PV_*_COOKIE` |
+        | `deleted` | 这条内容没了 | 换个链接再试 |
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 哪个平台
+      options:
+        - 抖音
+        - 快手
+        - 小红书
+        - 哔哩哔哩
+        - 微博
+        - 西瓜视频
+        - YouTube
+        - TikTok
+        - X (Twitter)
+        - Instagram
+        - 其他（在下面写）
+    validations:
+      required: true
+
+  - type: input
+    id: reason
+    attributes:
+      label: 报错里的 reason
+      description: 就是 `解析失败 [xxx]` 方括号里那个词
+      placeholder: parse
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: 完整输出
+      description: |
+        `pv --json "链接" 2>&1` 的结果。
+        **贴之前先把 cookie、代理地址这类东西删掉。**
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: link
+    attributes:
+      label: 一条能复现的链接
+      description: |
+        可以的话给一条公开内容的链接——没有真实链接基本没法修，
+        因为解析器的问题几乎都出在"平台对这一条返回了什么"上。
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: "`pv --version`，或者 git 的 commit"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: network
+    attributes:
+      label: 服务器在哪
+      description: 国内平台从境外机房访问基本都会被挡，这个信息很关键
+      options:
+        - 中国大陆
+        - 境外，配了 PV_PROXY_CN
+        - 境外，没配代理
+        - 本机开发环境
+    validations:
+      required: true

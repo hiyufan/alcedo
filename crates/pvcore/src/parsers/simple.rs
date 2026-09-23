@@ -27,10 +27,12 @@ fn check_code(json: &Value, code_path: &[&str], ok: i64, msg_paths: &[&[&str]]) 
 
 // ---------------------------------------------------------------- 微视
 
+/// 解析一条微视分享链接。
 pub async fn weishi(http: &Http, url: &str) -> Result<VideoInfo> {
     weishi_id(http, &util::query_param(url, "id")?).await
 }
 
+/// 已知微视作品 ID 时直接解析。
 pub async fn weishi_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let api = format!("https://h5.weishi.qq.com/webapp/json/weishi/WSH5GetPlayPage?feedid={id}");
     let json = http.get_json(&api).await?;
@@ -60,10 +62,12 @@ pub async fn weishi_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 最右
 
+/// 解析一条最右分享链接。
 pub async fn zuiyou(http: &Http, url: &str) -> Result<VideoInfo> {
     zuiyou_id(http, &util::query_param(url, "pid")?).await
 }
 
+/// 已知最右作品 ID 时直接解析。
 pub async fn zuiyou_id(http: &Http, id: &str) -> Result<VideoInfo> {
     // pid 必须是数字, 服务端按 int 解析
     let pid: u64 = id
@@ -103,10 +107,12 @@ pub async fn zuiyou_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 度小视
 
+/// 解析一条度小视分享链接。
 pub async fn quanmin(http: &Http, url: &str) -> Result<VideoInfo> {
     quanmin_id(http, &util::query_param(url, "vid")?).await
 }
 
+/// 已知度小视作品 ID 时直接解析。
 pub async fn quanmin_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let api = format!(
         "https://quanmin.hao222.com/wise/growth/api/sv/immerse\
@@ -146,6 +152,7 @@ pub async fn quanmin_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 皮皮搞笑
 
+/// 解析一条皮皮搞笑分享链接。
 pub async fn pipigaoxiao(http: &Http, url: &str) -> Result<VideoInfo> {
     let parsed = url::Url::parse(url)?;
     let id = parsed
@@ -159,6 +166,7 @@ pub async fn pipigaoxiao(http: &Http, url: &str) -> Result<VideoInfo> {
     pipigaoxiao_id(http, &id).await
 }
 
+/// 已知皮皮搞笑作品 ID 时直接解析。
 pub async fn pipigaoxiao_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let pid: u64 = id
         .parse()
@@ -195,10 +203,12 @@ pub async fn pipigaoxiao_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 逗拍
 
+/// 解析一条逗拍分享链接。
 pub async fn doupai(http: &Http, url: &str) -> Result<VideoInfo> {
     doupai_id(http, &util::query_param(url, "id")?).await
 }
 
+/// 已知逗拍作品 ID 时直接解析。
 pub async fn doupai_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let json = http
         .get_json(&format!("https://v2.doupai.cc/topic/{id}.json"))
@@ -220,10 +230,12 @@ pub async fn doupai_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 全民K歌
 
+/// 解析一条全民 K 歌分享链接。
 pub async fn quanminkge(http: &Http, url: &str) -> Result<VideoInfo> {
     quanminkge_id(http, &util::query_param(url, "s")?).await
 }
 
+/// 已知全民 K 歌作品 ID 时直接解析。
 pub async fn quanminkge_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let page = format!("https://kg.qq.com/node/play?s={id}");
     let resp = http
@@ -254,6 +266,7 @@ pub async fn quanminkge_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 六间房
 
+/// 解析一条六间房分享链接。
 pub async fn sixroom(http: &Http, url: &str) -> Result<VideoInfo> {
     let id = if url.contains("watchMini.php") {
         util::query_param(url, "vid")?
@@ -263,6 +276,7 @@ pub async fn sixroom(http: &Http, url: &str) -> Result<VideoInfo> {
     sixroom_id(http, &id).await
 }
 
+/// 已知六间房作品 ID 时直接解析。
 pub async fn sixroom_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let api = format!(
         "https://v.6.cn/coop/mobile/index.php?padapi=minivideo-watchVideo.php\
@@ -292,10 +306,12 @@ pub async fn sixroom_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
 // ---------------------------------------------------------------- 好看视频
 
+/// 解析一条好看视频分享链接。
 pub async fn haokan(http: &Http, url: &str) -> Result<VideoInfo> {
     haokan_id(http, &util::query_param(url, "vid")?).await
 }
 
+/// 已知好看视频作品 ID 时直接解析。
 pub async fn haokan_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let json = http
         .get_json(&format!("https://haokan.baidu.com/v?_format=json&vid={id}"))

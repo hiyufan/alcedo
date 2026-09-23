@@ -52,6 +52,7 @@ pub struct Signature {
 }
 
 impl Signature {
+    /// 什么都没签出来。
     pub fn is_empty(&self) -> bool {
         self.query.is_empty() && self.headers.is_empty() && self.cookies.is_empty()
     }
@@ -130,6 +131,7 @@ impl Signer {
         }
     }
 
+    /// 是否配了签名器。
     pub const fn is_configured(&self) -> bool {
         !matches!(self, Self::None)
     }

@@ -10,6 +10,7 @@ use crate::http::{ua, Http, Req};
 use crate::model::{Author, Format, Image, VideoInfo};
 use crate::util;
 
+/// 解析一条Reddit分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     // v.redd.it/<id> 是直链短链，先跟到帖子页
     let url = if util::host_of(url).is_some_and(|h| h.ends_with("redd.it")) {

@@ -266,6 +266,7 @@ pub fn i64_at(value: &Value, path: &[&str]) -> i64 {
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
+/// 取无符号整数。负数、NaN 和缺失一律当 0。
 pub fn u64_at(value: &Value, path: &[&str]) -> u64 {
     let n = num_at(value, path);
     if n.is_finite() && n > 0.0 {
@@ -277,6 +278,7 @@ pub fn u64_at(value: &Value, path: &[&str]) -> u64 {
     }
 }
 
+/// 取 `u32`，超出范围时夹到上界。
 pub fn u32_at(value: &Value, path: &[&str]) -> u32 {
     u32::try_from(u64_at(value, path)).unwrap_or(u32::MAX)
 }

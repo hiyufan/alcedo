@@ -7,6 +7,7 @@ use crate::http::{ua, Http, Req};
 use crate::model::VideoInfo;
 use crate::util;
 
+/// 解析一条梨视频分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let parsed = url::Url::parse(url)?;
     let id = parsed
@@ -19,6 +20,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &id).await
 }
 
+/// 已知梨视频作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     // mrd 是个随机数，梨视频拿它防缓存；用时间戳即可
     let mrd = std::time::SystemTime::now()

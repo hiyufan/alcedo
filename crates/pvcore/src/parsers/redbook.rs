@@ -30,6 +30,7 @@ const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) 
 /// 用户替后面的人垫一次白跑的请求。
 static PREFER_MOBILE: AtomicBool = AtomicBool::new(false);
 
+/// 解析一条小红书分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let mobile_first = PREFER_MOBILE.load(Ordering::Relaxed);
     let order = if mobile_first {

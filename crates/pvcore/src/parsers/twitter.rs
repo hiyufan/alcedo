@@ -13,6 +13,7 @@ use crate::util;
 const WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
                       (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
+/// 解析一条X（Twitter）分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     // t.co 短链先跟一跳
     let url = if url.contains("t.co/") {
@@ -28,6 +29,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, &id).await
 }
 
+/// 已知X（Twitter）作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, tweet_id: &str) -> Result<VideoInfo> {
     if !tweet_id.bytes().all(|b| b.is_ascii_digit()) || tweet_id.is_empty() {
         return Err(Error::unsupported("推文 ID 应当是一串数字"));

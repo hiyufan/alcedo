@@ -5,6 +5,7 @@ use crate::http::{ua, Http, Req};
 use crate::model::{Author, Format, VideoInfo};
 use crate::util;
 
+/// 解析一条虎牙分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     // https://v.huya.com/play/123456.html
     let id = url
@@ -16,6 +17,7 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     parse_id(http, id).await
 }
 
+/// 已知虎牙作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let api = format!("https://liveapi.huya.com/moment/getMomentContent?videoId={id}");
     let resp = http

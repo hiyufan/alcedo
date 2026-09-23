@@ -17,6 +17,7 @@ const GQL: &str = "https://gql.twitch.tv/gql";
 /// 网页版 Twitch 内置的公开 client-id。
 const CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 
+/// 解析一条Twitch分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     match target(url)? {
         Target::Clip(slug) => clip(http, &slug).await,

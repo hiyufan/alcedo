@@ -7,12 +7,14 @@ use crate::http::{ua, Http, Req};
 use crate::model::{Author, VideoInfo};
 use crate::util;
 
+/// 解析一条Dailymotion分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let xid =
         xid_from_url(url).ok_or_else(|| Error::unsupported("链接里没有 Dailymotion 的视频 ID"))?;
     parse_id(http, &xid).await
 }
 
+/// 已知Dailymotion作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, xid: &str) -> Result<VideoInfo> {
     let api = format!("https://www.dailymotion.com/player/metadata/video/{xid}");
     let resp = http

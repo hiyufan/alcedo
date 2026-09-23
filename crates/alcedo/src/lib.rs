@@ -19,6 +19,7 @@
 //!   检查与连接之间的时间差。
 //! - **结构化错误**：失败都带 [`Reason`]，前端能直接说人话。
 
+pub mod cache;
 pub mod error;
 pub mod http;
 pub mod model;
@@ -34,6 +35,27 @@ pub use http::Config;
 
 /// 全局闸门。进程内共享——熔断状态按平台算，每个 [`Client`] 各留一份就失去意义了。
 static GOVERNOR: Governor = Governor::new(Limits::const_default());
+
+/// 全局结果缓存。同样进程内共享：分散到每个 [`Client`] 就基本命中不了。
+///
+/// TTL 和容量在第一次用到时从环境变量读（`ALCEDO_CACHE_TTL` 秒、
+/// `ALCEDO_CACHE_CAPACITY` 条），`ALCEDO_CACHE_TTL=0` 关闭。
+static CACHE: std::sync::LazyLock<cache::Cache> = std::sync::LazyLock::new(|| {
+    let secs = std::env::var("ALCEDO_CACHE_TTL")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(300);
+    let cap = std::env::var("ALCEDO_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(512);
+    cache::Cache::new(std::time::Duration::from_secs(secs), cap)
+});
+
+/// 结果缓存的句柄，给上层做 `/health` 或手动清理用。
+pub fn result_cache() -> &'static cache::Cache {
+    &CACHE
+}
 pub use model::{Author, Format, Image, Source, VideoInfo};
 
 /// 解析入口。构造一次，全程复用——它持有连接池。
@@ -121,12 +143,20 @@ impl Client {
             ))
         })?;
 
+        // 缓存键用规范化后的地址：同一条内容的不同写法应当命中同一条
+        let key = cache_key(source, &url);
+        if let Some(hit) = CACHE.get(&key) {
+            return Ok(hit);
+        }
+
         self.pass_gate(source).await?;
         let http = http::Http::new(Arc::clone(&self.cfg), Some(source))?;
         let outcome = self
             .with_timeout(parsers::dispatch(&http, source, &url))
             .await;
-        self.settle(source, &url, outcome)
+        let done = self.settle(source, &url, outcome)?;
+        CACHE.put(&key, &done);
+        Ok(done)
     }
 
     /// 已经知道平台和作品 ID 时直接解析。
@@ -134,12 +164,19 @@ impl Client {
         if id.trim().is_empty() {
             return Err(Error::unsupported("作品 ID 为空"));
         }
+        let key = cache_key(source, id);
+        if let Some(hit) = CACHE.get(&key) {
+            return Ok(hit);
+        }
+
         self.pass_gate(source).await?;
         let http = http::Http::new(Arc::clone(&self.cfg), Some(source))?;
         let outcome = self
             .with_timeout(parsers::dispatch_id(&http, source, id))
             .await;
-        self.settle(source, id, outcome)
+        let done = self.settle(source, id, outcome)?;
+        CACHE.put(&key, &done);
+        Ok(done)
     }
 
     async fn with_timeout(
@@ -208,6 +245,20 @@ impl Client {
         }
         Ok(())
     }
+}
+
+/// 缓存键。带上平台是因为不同平台的 ID 命名空间是独立的。
+fn cache_key(source: Source, target: &str) -> String {
+    // 去掉 query 里的跟踪参数，让同一条内容的不同分享写法命中同一条缓存
+    let cleaned = url::Url::parse(target).map_or_else(
+        |_| target.to_owned(),
+        |mut u| {
+            u.set_query(None);
+            u.set_fragment(None);
+            u.to_string()
+        },
+    );
+    format!("{}|{cleaned}", source.as_str())
 }
 
 #[cfg(test)]

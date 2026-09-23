@@ -181,3 +181,68 @@ fn video_info_serialises_to_the_documented_shape() {
     let back: alcedo::VideoInfo = serde_json::from_value(json).unwrap();
     assert_eq!(back, info);
 }
+
+#[test]
+fn result_cache_handle_is_usable() {
+    // 上层做 /health 或平台改版后手动清理时要用到
+    let cache = alcedo::result_cache();
+    let before = cache.len();
+    cache.clear();
+    assert!(
+        cache.is_empty(),
+        "clear 之后该是空的（清理前有 {before} 条）"
+    );
+}
+
+#[test]
+fn cached_urls_are_never_served_past_their_own_expiry() {
+    use std::time::Duration;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let cache = alcedo::cache::Cache::new(Duration::from_secs(3600), 4);
+    // 一条马上就要过期的直链：缓存它等于给下一个用户发 403
+    let dying = alcedo::VideoInfo {
+        video_url: format!("https://cdn/x.mp4?deadline={}", now + 30),
+        ..Default::default()
+    };
+    cache.put("dying", &dying);
+    assert!(
+        cache.get("dying").is_none(),
+        "快过期的地址不该进缓存——缓存一条死链比不缓存更糟"
+    );
+
+    // 还能活很久的就正常缓存
+    let healthy = alcedo::VideoInfo {
+        video_url: format!("https://cdn/y.mp4?deadline={}", now + 7200),
+        ..Default::default()
+    };
+    cache.put("healthy", &healthy);
+    assert!(cache.get("healthy").is_some());
+}
+
+#[test]
+fn url_expiry_recognises_real_world_shapes() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let t = now + 3600;
+
+    // B 站
+    assert_eq!(
+        alcedo::cache::url_expiry(&format!("https://x.bilivideo.com/a.m4s?deadline={t}")),
+        Some(t)
+    );
+    // 抖音：过期时刻是路径里的一段十六进制
+    assert_eq!(
+        alcedo::cache::url_expiry(&format!(
+            "https://v11.365yg.com/aabbccddeeff00112233445566778899/{t:x}/video/tos/cn/x/"
+        )),
+        Some(t)
+    );
+    // 没有过期信息的地址不该瞎猜
+    assert_eq!(alcedo::cache::url_expiry("https://x/playlist.m3u8"), None);
+}

@@ -35,6 +35,9 @@ jobs:
         # GitHub 的出口是机房 IP，国内平台多半会被挡——配了代理就用，
         # 没配也照跑，至少海外平台的结果是有效的
         env:
+          # 必须关缓存：冒烟测试的全部意义是"真去问一次平台"，
+          # 命中缓存会让一个已经坏掉的解析器照样跑绿
+          ALCEDO_CACHE_TTL: "0"
           ALCEDO_PROXY: ${{ secrets.ALCEDO_PROXY }}
           ALCEDO_PROXY_CN: ${{ secrets.ALCEDO_PROXY_CN }}
           ALCEDO_BILI_COOKIE: ${{ secrets.ALCEDO_BILI_COOKIE }}

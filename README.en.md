@@ -231,6 +231,9 @@ start with environment settings before changing individual fields.
 | `ALCEDO_MAX_REDIRECTS` | Maximum redirect count | `8` |
 | `ALCEDO_MAX_BODY_BYTES` | Response body cap | `16777216` |
 | `ALCEDO_SSRF_DNS` | Set to `0` to disable private-address blocking at the DNS layer | `1` |
+| `ALCEDO_CACHE_TTL` | Result cache TTL in seconds; `0` disables. See [result cache](#result-cache) | `300` |
+| `ALCEDO_CACHE_CAPACITY` | Maximum cached entries | `512` |
+| `ALCEDO_HEDGE_AFTER_MS` | Hedged-request threshold; `0` disables. See [hedged requests](#hedged-requests) | `0` |
 
 Proxy, cookie and `ALCEDO_SSRF_DNS` settings accept their corresponding legacy
 `PARSE_VIDEO_*` names. Timeout, body size, redirect and signer settings use the
@@ -250,6 +253,59 @@ Whether the request succeeds still depends on the platform response.
 
 See the [design notes](docs/design.en.md) for connection reuse, platform dispatch
 and address checks.
+
+## Result cache
+
+On by default with a 5-minute TTL. Popular content gets parsed repeatedly in short
+windows; a cache hit takes **0 ms**.
+
+The critical constraint is **never serving an already-dead URL** — that's worse than
+being slow, because the user gets a 403 and no reason to retry. So the TTL isn't a
+guess; it's read off the direct URL itself:
+
+| Platform | Where the expiry lives | Measured lifetime |
+| --- | --- | --- |
+| Douyin | A hex segment in the path | ~80 minutes |
+| Bilibili | `deadline` parameter | 2 hours |
+| Others | `x-expires` / `expire` / `oe` parameters | varies |
+
+We take the **earliest** expiry across every URL in the result, subtract a 2-minute
+safety margin, then clamp to the configured cap. URLs close to expiry aren't cached
+at all.
+
+The cap is short (5 minutes by default) because a live URL doesn't mean the
+**content** is still there — it may have been deleted or made private. And the
+returns diminish fast: at 100 parses per hour for one link, 5 minutes already
+absorbs about 92% of them.
+
+Set `ALCEDO_CACHE_TTL=0` when you need a fresh result every time. As a library you
+can reach the cache directly:
+
+```rust
+let cache = alcedo::result_cache();
+println!("{} entries", cache.len());
+cache.clear();   // after a platform change or a cookie swap
+```
+
+## Hedged requests
+
+If the primary request hasn't returned within a threshold, send a duplicate and take
+whichever answers first. **Off by default.**
+
+Hedging only helps when the slowness comes from backend instance variance. When it
+comes from a shared path (a local proxy, a cross-border link), the duplicate hits the
+same bottleneck. Measured here through a proxy: about 10% off p90, within noise —
+while the slower fraction of requests doubles. On a rate-limited platform, extra
+requests are themselves a risk.
+
+It may pay off on a direct connection, but **measure before enabling**:
+
+```bash
+ALCEDO_HEDGE_AFTER_MS=0   cargo run --release -p alcedo --example bench -- <url> 30
+ALCEDO_HEDGE_AFTER_MS=300 cargo run --release -p alcedo --example bench -- <url> 30
+```
+
+Compare p90 between the two. Put the threshold between p50 and p90.
 
 ## Limitations
 

@@ -7,6 +7,7 @@
 给一条分享链接，返回媒体地址、图集、封面、作者和可用清晰度。
 
 [![CI](https://github.com/hiyufan/alcedo/actions/workflows/ci.yml/badge.svg)](https://github.com/hiyufan/alcedo/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/alcedo-cli.svg)](https://www.npmjs.com/package/alcedo-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platforms-35-green.svg)](#支持的平台)
@@ -73,27 +74,21 @@ Pinterest · Dailymotion
 
 ### 安装
 
-通过 npm 安装预编译二进制（Linux / macOS / Windows，x64 与 arm64），不需要 Rust 工具链：
+**npm**（推荐）：预编译二进制，覆盖 Linux / macOS / Windows 的 x64 与 arm64，不需要 Rust 工具链。
 
 ```bash
-npm install -g alcedo-cli
+npm install -g alcedo-cli     # 装好后命令是 alcedo
+npx alcedo-cli --list         # 或者不安装直接运行
 ```
 
-预编译压缩包也附在 [GitHub Releases](https://github.com/hiyufan/alcedo/releases) 上。
+**预编译压缩包**：从 [GitHub Releases](https://github.com/hiyufan/alcedo/releases) 下载对应平台的
+压缩包，解压后把 `alcedo` 放进 `PATH`。Linux 版本静态链接 musl，不依赖发行版。
 
-从源码安装需要 Rust 工具链。Windows 推荐使用 MSVC 工具链并安装 Visual Studio Build Tools
-的 C++ 构建工具；其他工具链和排障见[Windows 构建](CONTRIBUTING.md#windows-构建)。
-
-```bash
-git clone https://github.com/hiyufan/alcedo
-cd alcedo
-cargo install --path crates/alcedo-cli
-```
-
-或只构建不安装，产物在 `target/release/alcedo`（Windows 为 `alcedo.exe`）：
+**从源码构建**：需要 Rust 1.85+。Windows 推荐 MSVC 工具链并安装 Visual Studio Build Tools
+的 C++ 构建工具，其他工具链和排障见[Windows 构建](CONTRIBUTING.md#windows-构建)。
 
 ```bash
-cargo build --release
+cargo install --git https://github.com/hiyufan/alcedo alcedo-cli
 ```
 
 ### 命令行

@@ -8,6 +8,7 @@ Give it a share link, get back media URLs, image galleries, covers, author info
 and available quality options.
 
 [![CI](https://github.com/hiyufan/alcedo/actions/workflows/ci.yml/badge.svg)](https://github.com/hiyufan/alcedo/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/alcedo-cli.svg)](https://www.npmjs.com/package/alcedo-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platforms-35-green.svg)](#supported-platforms)
@@ -75,29 +76,24 @@ see [limitations](#limitations).
 
 ### Install
 
-Install the prebuilt binary from npm (Linux / macOS / Windows, x64 and arm64). No Rust
-toolchain needed:
+**npm** (recommended): prebuilt binaries for Linux / macOS / Windows on x64 and arm64. No Rust
+toolchain needed.
 
 ```bash
-npm install -g alcedo-cli
+npm install -g alcedo-cli     # installs the `alcedo` command
+npx alcedo-cli --list         # or run without installing
 ```
 
-Prebuilt archives are also attached to [GitHub Releases](https://github.com/hiyufan/alcedo/releases).
+**Prebuilt archives**: download the archive for your platform from
+[GitHub Releases](https://github.com/hiyufan/alcedo/releases), extract it and put `alcedo` on
+your `PATH`. Linux builds are statically linked against musl and work on any distribution.
 
-Installing from source requires a Rust toolchain. On Windows, MSVC with the C++ build tools from Visual
+**From source**: requires Rust 1.85+. On Windows, MSVC with the C++ build tools from Visual
 Studio Build Tools is recommended. See the [Windows build notes](CONTRIBUTING.en.md#windows-builds)
 for other toolchains and troubleshooting.
 
 ```bash
-git clone https://github.com/hiyufan/alcedo
-cd alcedo
-cargo install --path crates/alcedo-cli
-```
-
-Or build without installing. The binary is `target/release/alcedo` (`alcedo.exe` on Windows):
-
-```bash
-cargo build --release
+cargo install --git https://github.com/hiyufan/alcedo alcedo-cli
 ```
 
 ### Command line

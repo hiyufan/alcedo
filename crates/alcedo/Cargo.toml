@@ -38,7 +38,7 @@ encoding_rs = "0.8"
 scraper = { version = "0.23", default-features = false }
 base64 = "0.22"
 percent-encoding = "2"
-rand = "0.9"
+rand = "0.10"
 parking_lot = "0.12"
 
 [dev-dependencies]

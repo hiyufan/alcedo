@@ -2,10 +2,10 @@
 
 # alcedo
 
-**A fast video platform extractor**
+**A Rust library and CLI for video platform extraction**
 
-Give it a share link, get back watermark-free direct URLs, image galleries,
-covers, author info and the full quality ladder.
+Give it a share link, get back media URLs, image galleries, covers, author info
+and available quality options.
 
 [![CI](https://github.com/hiyufan/alcedo/actions/workflows/ci.yml/badge.svg)](https://github.com/hiyufan/alcedo/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -32,27 +32,16 @@ $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
   - 仅音频       3.4 MB
 ```
 
-> *Alcedo* is the genus of kingfishers. A kingfisher does not cast a net — it
-> perches, takes aim, dives straight down and comes back with exactly the one
-> thing it went for. This project does the same.
+*Alcedo* is a genus of kingfishers.
 
 ## Features
 
-- **35 platforms**, covering the major Chinese and international sites
-- **Single binary, no runtime dependencies** — no Python, no Node, no headless
-  browser; extraction doesn't need ffmpeg either
-- **Fast** — process-wide connection reuse; ~250 ms for Bilibili and ~1 s for
-  YouTube on a warm connection
-- **Watermark-free** — uses the clean direct URLs the platforms serve themselves
-- **Galleries and Live Photos** — multi-image posts and the short clip behind a
-  Live Photo both come out
-- **Full quality ladder** — 4K / AV1 / H.265 / audio-only, with separated
-  audio-video tracks clearly flagged
-- **Errors humans can act on** — nine structured reasons a frontend can surface
-  directly
-- **Anti-throttling built in** — per-platform rate limiting and circuit breaking,
-  on by default
-- **Safe** — per-hop SSRF protection, `unsafe` forbidden workspace-wide
+- **35 platforms**: supports the Chinese and international sites listed below.
+- **Native Rust**: built-in extraction paths do not require Python, Node or a headless browser.
+- **Consistent output**: shared data structures for media URLs, galleries, Live Photos and author information.
+- **Multiple qualities**: returns available formats, including 4K, AV1, H.265 and audio-only where provided; identifies separate audio and video tracks.
+- **Structured errors**: distinguishes unavailable content, sign-in requirements, rate limits and network failures.
+- **Request controls**: reuses HTTP connections, limits requests per platform and enables private-address checks by default.
 
 ## Supported platforms
 
@@ -78,11 +67,17 @@ Pinterest · Dailymotion
 </td></tr>
 </table>
 
-Run `alcedo --list` for the full list with the domains each platform matches.
+Run `alcedo --list` for the full list and supported domains. Available content and
+quality depend on sign-in status, region, network egress and platform changes;
+see [limitations](#limitations).
 
 ## Quick start
 
 ### Install
+
+Requires a Rust toolchain. On Windows, MSVC with the C++ build tools from Visual
+Studio Build Tools is recommended. See the [Windows build notes](CONTRIBUTING.en.md#windows-builds)
+for other toolchains and troubleshooting.
 
 ```bash
 git clone https://github.com/hiyufan/alcedo
@@ -90,7 +85,7 @@ cd alcedo
 cargo install --path crates/alcedo-cli
 ```
 
-Or just build it — the binary lands in `target/release/alcedo`:
+Or build without installing. The binary is `target/release/alcedo` (`alcedo.exe` on Windows):
 
 ```bash
 cargo build --release
@@ -123,7 +118,7 @@ use alcedo::Client;
 
 #[tokio::main]
 async fn main() -> alcedo::Result<()> {
-    // Build once and reuse it — it owns the connection pool
+    // Read configuration from the environment; this Client can be reused
     let client = Client::new()?;
     let info = client.parse("https://v.douyin.com/xxxxxx/").await?;
 
@@ -151,29 +146,29 @@ match client.parse(url).await {
 }
 ```
 
-| Reason | Meaning | Who acts on it |
+| Reason | Meaning | Suggested action |
 | --- | --- | --- |
-| `parse` | The platform changed its page structure | **Maintainers** — the extractor needs updating |
+| `parse` | Response data does not match the extractor's expectations | Maintainers check API changes and parsing logic |
 | `deleted` | Content removed / private / link expired | User tries another link |
 | `login` | The platform now requires sign-in | Operator supplies a cookie |
-| `blocked` | Throttled or rate-limited | Operator changes egress or adds a proxy |
-| `restricted` | The platform won't serve this item's data | Nothing to do; the app usually still shows it |
+| `blocked` | Throttled or rate-limited | Reduce request frequency; check egress or proxy settings |
+| `restricted` | The platform restricts access to this content | Check account, region or content permissions |
 | `unsupported` | Link not recognised | User tries another link |
 | `network` / `timeout` | Network trouble | Retry later |
-| `empty` | Parsed fine but nothing in it | Rare, usually a platform hiccup |
-
-This split is deliberate: **only `parse` needs a human**. Everything else is an
-external condition.
+| `empty` | No media was extracted | Check the link; report persistent failures to maintainers |
 
 ## Output format
 
+The main fields are shown below. Some fields are omitted when they contain empty
+strings, empty collections or zero values.
+
 ```jsonc
 {
-  "video_url": "https://...",     // the track a browser can play directly
+  "video_url": "https://...",     // default media URL; may be empty for galleries or separate tracks
   "cover_url": "https://...",
   "title": "...",
   "music_url": "https://...",     // background music / gallery audio
-  "images": [                     // gallery; empty when there's a video
+  "images": [                     // gallery fields; depend on the content type
     { "url": "https://...", "live_photo_url": "https://..." }   // Live Photo clip
   ],
   "author": { "uid": "...", "name": "...", "avatar": "https://..." },
@@ -186,7 +181,7 @@ external condition.
     { "label": "1080p", "url": "https://...", "ext": "mp4",
       "height": 1080, "filesize": 8400000, "codec": "" },
 
-    // empty url + non-empty video_url/audio_url = separate tracks, needs ffmpeg
+    // separate tracks use video_url/audio_url; merge for combined playback
     { "label": "2160p AV1", "url": "", "ext": "mp4", "height": 2160, "codec": "AV1",
       "video_url": "https://...", "audio_url": "https://..." }
   ],
@@ -195,202 +190,84 @@ external condition.
 ```
 
 > [!IMPORTANT]
-> `video_headers` is not optional. The CDNs behind Douyin, Bilibili, Xiaohongshu
-> and TikTok all check `Referer`. Pass these headers through verbatim when
-> fetching a direct URL, or you get a 403.
+> Pass the returned `video_headers` through when downloading media. Some CDNs
+> validate headers such as `Referer`; omitting them may result in a 403.
 
 ## Configuration
 
-Everything is environment variables — no config file.
+The CLI and `Client::new()` read configuration from environment variables without
+a config file. Library users can also supply a `Config` to `Client::with_config`:
+
+```rust
+use std::time::Duration;
+use alcedo::{Client, Config};
+
+let client = Client::with_config(Config {
+    total_timeout: Duration::from_secs(60),
+    ..Config::default()
+});
+```
+
+`Config::default()` does not read the environment. Use `Config::from_env()` to
+start with environment settings before changing individual fields.
 
 | Variable | What it does | Default |
 | --- | --- | --- |
 | `ALCEDO_PROXY` | Proxy for every platform, e.g. `http://127.0.0.1:7890`, `socks5://...` | none |
-| `ALCEDO_PROXY_CN` | Proxy used **only** for Chinese platforms. Required for Douyin / Xiaohongshu when deploying outside China | none |
-| `ALCEDO_BILI_COOKIE` | Bilibili login cookie; without it you only get 720p | none |
-| `ALCEDO_XHS_COOKIE` | Xiaohongshu login cookie; effectively required from datacenter IPs | none |
+| `ALCEDO_PROXY_CN` | Preferred proxy for Chinese platforms; falls back to `ALCEDO_PROXY` when unset | none |
+| `ALCEDO_BILI_COOKIE` | Bilibili login cookie; available quality depends on account and content permissions | none |
+| `ALCEDO_XHS_COOKIE` | Xiaohongshu cookie for requests that require sign-in | none |
 | `ALCEDO_DOUYIN_COOKIE` | Douyin cookie; when set, no anonymous identity is fetched | none |
-| `ALCEDO_YOUTUBE_COOKIE` | YouTube cookie, for when you hit the bot check | none |
-| `ALCEDO_SIGNER_<PLATFORM>` | External signer, see [below](#external-signers) | none |
+| `ALCEDO_YOUTUBE_COOKIE` | YouTube cookie for requests that require sign-in; does not guarantee passing bot checks | none |
+| `ALCEDO_SIGNER_DOUYIN` | Optional Douyin signer; see the [signer protocol](docs/signers.en.md) | none |
+| `ALCEDO_CONNECT_TIMEOUT` | Connection timeout in seconds | `8` |
 | `ALCEDO_REQUEST_TIMEOUT` | Per-request timeout in seconds | `20` |
 | `ALCEDO_TOTAL_TIMEOUT` | Whole-parse timeout in seconds | `45` |
+| `ALCEDO_MAX_REDIRECTS` | Maximum redirect count | `8` |
 | `ALCEDO_MAX_BODY_BYTES` | Response body cap | `16777216` |
 | `ALCEDO_SSRF_DNS` | Set to `0` to disable private-address blocking at the DNS layer | `1` |
 
-The `PARSE_VIDEO_*` prefix is also accepted, to ease migration from older
-deployment scripts.
+Proxy, cookie and `ALCEDO_SSRF_DNS` settings accept their corresponding legacy
+`PARSE_VIDEO_*` names. Timeout, body size, redirect and signer settings use the
+`ALCEDO_*` names above. Signers read the environment separately and are not part
+of `Config`.
 
-## Resilience
+## Request controls and access restrictions
 
-Three layers, all on by default and requiring no configuration.
+Rate limiting and circuit breaking are enabled per platform. Consecutive
+platform-side failures temporarily pause requests with increasing cooldowns;
+errors such as deleted content do not count toward the breaker. Some extraction
+paths obtain and cache guest identities.
 
-**Per-platform rate limiting and circuit breaking.** Each platform gets its own
-token bucket and circuit breaker. Douyin getting throttled does not affect a
-YouTube parse in flight. Five consecutive platform-side failures trip the
-breaker for that platform, with exponential backoff (15s → 30s → … capped at
-5 minutes); during that window requests fail fast instead of hammering further.
+Douyin can use an external signer; see the [configuration and JSON protocol](docs/signers.en.md).
+When a signer is unset or fails, extraction continues without its signature.
+Whether the request succeeds still depends on the platform response.
 
-One deliberate design point: **only platform-side failures count toward
-tripping**. A user pasting five dead links gets five `deleted` errors — the
-content is gone, the platform is fine. Counting those would let a user's slip of
-the hand take a whole platform offline for minutes. Only `blocked` / `network` /
-`timeout` / `login` — the "they won't let us in" signals — are counted.
+See the [design notes](docs/design.en.md) for connection reuse, platform dispatch
+and address checks.
 
-**Guest identities.** Some platforms have grown hostile toward requests carrying
-no cookies at all, while still offering an unsigned registration endpoint. We
-fetch an anonymous identity the way a browser would, cache it, and drop it for a
-fresh one when it gets rejected.
+## Limitations
 
-### External signers
-
-A few platforms use request-signing algorithms that **rotate on a schedule**.
-Hard-coding one of those here would mean re-reversing and re-releasing on every
-rotation — it would become the highest-maintenance, most rot-prone part of the
-whole repository.
-
-So it's a pluggable provider instead: the algorithm lives in an external program
-or service. When it changes you swap that out, without touching or rebuilding
-this repository.
-
-```bash
-ALCEDO_SIGNER_DOUYIN=http://127.0.0.1:9000/sign   # long-running service (preferred)
-ALCEDO_SIGNER_DOUYIN=cmd:/opt/alcedo/signer       # subprocess, JSON over stdin/stdout
-```
-
-The protocol is identical over both transports:
-
-```jsonc
-// request
-{ "platform": "douyin", "url": "https://...", "query": "aweme_ids=%5B123%5D",
-  "user_agent": "Mozilla/5.0 ...", "body": "" }
-
-// response — all three fields optional
-{ "query": { "a_bogus": "..." }, "headers": {}, "cookies": { "msToken": "..." } }
-```
-
-**Not configuring one is fine** — extractors take the unsigned path and don't
-error. If the signer crashes, times out (5 s), or returns invalid JSON, the
-unsigned path is used anyway: a signer is an enhancement and must never take
-down a route that already worked.
-
-## Design
-
-**The connection pool is process-wide.** One parse issues 3–4 requests (short
-link redirect, API, page). One HTTP client per proxy configuration means TCP
-connections, TLS sessions and DNS results are reused throughout.
-
-**Dispatch is static.** Platforms are a closed set known at compile time, so a
-`match` calls straight into the concrete function. No trait objects, no virtual
-calls anywhere on the parse path.
-
-**JSON embedded in HTML is extracted by brace matching, not regex.** The usual
-`marker\s*=\s*(.*?)</script>` has two failure modes: an escaped `</script>`
-inside a JSON string truncates the payload early, and a trailing `;var x=1`
-gets swallowed when other JS follows. Brace matching has neither problem, and
-it's an order of magnitude faster on pages of a few hundred KB.
-
-**Platforms are matched by domain suffix, not substring.** Substring matching
-would classify `https://evil.com/?r=www.douyin.com` as Douyin and then send
-Douyin's request headers to the attacker's server.
-
-**SSRF is blocked at DNS resolution.** Extractors follow user-supplied short
-links, so every hop is a user-controlled address. Rejecting private IPs inside a
-custom resolver saves a `getaddrinfo` call *and* closes the window where a DNS
-record could change between the check and the actual connection.
-
-**YouTube needs no JavaScript.** The web client returns URLs carrying a
-`signatureCipher` that requires running obfuscated JS to unwrap, plus a PO
-token. The VisionOS / iOS / Android VR / TV clients return **already-signed
-direct URLs** — same content, zero JS, zero tokens. If one client gets
-restricted, reordering the client list is the whole fix.
-
-**Bilibili goes straight to DASH.** Passing `fnval=4048` to `playurl` returns
-separated audio and video tracks, so the quality ladder — 4K, AV1, H.265 — comes
-out of a single request and is handed upward for merging.
-
-## Performance
-
-Same machine, same link, six consecutive parses in one process:
-
-| Platform | First call (incl. DNS + TLS) | Warm median |
-| --- | --- | --- |
-| Bilibili | 412 ms | **256 ms** |
-| PearVideo | — | **216 ms** |
-| AcFun | — | **412 ms** |
-| YouTube | — | **982 ms** |
-
-The gap between the first call and the rest is connection reuse paying off.
-Reproduce it yourself:
-
-```bash
-cargo run --release -p alcedo --example bench -- <url> 10
-```
-
-> Network jitter covers a lot of ground. These numbers were taken back-to-back
-> in one sitting; a different time or network will shift them.
+- Platform support does not imply support for every content type. Sign-in status, region and API changes affect results.
+- The library returns media information and URLs. Callers handle downloading, HLS processing and merging separate audio and video tracks.
+- Watermarks, quality and codecs depend on the media URLs the platform provides. Some content has only galleries, audio or separate tracks.
+- Rate limiting, guest identities and external signers do not guarantee access through platform restrictions.
 
 ## Development
 
 ```bash
-cargo test --workspace                  # unit + contract tests, all offline
-cargo clippy --workspace --all-targets  # lint baseline lives in [workspace.lints]
-cargo fmt --all
-
-cargo test --workspace -- --ignored     # networked smoke tests (hits real platforms)
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-### Testing strategy
-
-The two kinds of tests answer different questions, so they're kept apart:
-
-- **Unit + contract tests** (188, all offline): given this response, is the
-  parsing logic correct?
-- **Smoke tests** (marked `#[ignore]`, run on a daily schedule): is the platform
-  still returning it this way today?
-
-Unit tests run against fixed samples, so they stay green even after a platform
-rewrites its page. Only actually hitting the live endpoint tells you whether an
-extractor still works. That makes the scheduled smoke run this project's **early
-warning for platform changes**: it opens an issue when it goes red and closes it
-when things recover.
-
-### Lint baseline
-
-The rules live in `[workspace.lints]` in the root `Cargo.toml` rather than being
-passed by a CI script, so local and CI runs share one standard — no "it's green
-on my machine".
-
-Current state: `clippy::all` at **deny**, plus a curated set of pedantic lints,
-with **zero warnings**. `unsafe_code = "forbid"` and `missing_docs = "warn"`.
-
-Each selected lint earned its place by catching something real here:
-
-| Lint | What it caught |
-| --- | --- |
-| `case_sensitive_file_extension_comparisons` | `.ends_with(".webp")` missing a CDN's `.WEBP` |
-| `cast_possible_truncation` | A dozen integer conversions routed through f64, losing precision on large values |
-| `unnecessary_wraps` | Functions that always returned `Ok`, forcing callers into a pointless `?` |
-| `too_many_lines` | A 137-line function (since split) |
-
-### Building on Windows
-
-You need a working linker. With Visual Studio Build Tools installed, the default
-MSVC toolchain just works. Without them, the GNU toolchain is less hassle:
-
-```powershell
-rustup toolchain install stable-x86_64-pc-windows-gnu
-rustup set default-host x86_64-pc-windows-gnu
-winget install -e --id BrechtSanders.WinLibs.POSIX.MSVCRT   # provides dlltool / as
-# then add its mingw64\bin to PATH
-```
-
-The mingw bundled with rustup is trimmed down and lacks the `as` that `dlltool`
-depends on, so some crates fail to link.
+See the [contributing guide](CONTRIBUTING.en.md) for test strategy, networked smoke
+tests and Windows builds. For timing extraction, see [performance measurement](docs/design.en.md#performance-measurement).
 
 ## Contributing
 
-PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a platform,
-the house rules, and commit message conventions.
+PRs are welcome. See the [contributing guide](CONTRIBUTING.en.md) for adding
+platforms, code requirements and commit conventions.
 
 For vulnerabilities, please use
 [private reporting](https://github.com/hiyufan/alcedo/security/advisories/new)

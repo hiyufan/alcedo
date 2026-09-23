@@ -1,0 +1,189 @@
+name: 发布
+
+# 推一个 v 开头的 tag 就发版：
+#
+#   1. 校验 tag 和 Cargo.toml 里的版本一致，跑一遍测试
+#   2. 按 npm/platforms.json 在各平台原生构建 CLI（Linux 用 musl 静态链接，不挑发行版）
+#   3. 发到 npm：各平台包 alcedo-cli-<os>-<arch> + 主包 alcedo-cli
+#   4. 建 GitHub Release，附各平台压缩包
+#
+# 带预发布后缀的 tag（v0.2.0-beta.1）在 npm 上打 next 标签，不影响 latest。
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# 同一个 tag 不会有两次发布同时在跑
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: 校验版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      npm-tag: ${{ steps.version.outputs.npm-tag }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: tag 必须和 Cargo.toml 的版本一致
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "alcedo-cli") | .version')"
+          if [ "$tag" != "$cargo_version" ]; then
+            echo "::error::tag 是 v$tag，但 Cargo.toml 里是 $cargo_version。先改版本号再打 tag。"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          if [[ "$tag" == *-* ]]; then echo "npm-tag=next" >> "$GITHUB_OUTPUT"; else echo "npm-tag=latest" >> "$GITHUB_OUTPUT"; fi
+
+      - name: 测试
+        run: cargo test --workspace --locked
+
+      - name: 构建矩阵
+        id: matrix
+        run: echo "matrix=$(jq -c '{include: .}' npm/platforms.json)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: 构建 (${{ matrix.id }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # ring / zstd 有 C 代码，musl 目标要用 musl-gcc 编；显式指定，
+      # 否则 cc-rs 在 arm64 上会去找不存在的 aarch64-linux-musl-gcc
+      - name: 安装 musl 工具链
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          target_env="$(echo '${{ matrix.target }}' | tr '-' '_')"
+          echo "CC_${target_env}=musl-gcc" >> "$GITHUB_ENV"
+
+      - name: 构建
+        run: cargo build --release --locked -p alcedo-cli --target ${{ matrix.target }}
+
+      # 交叉编译的 darwin-x64 在 arm64 机器上靠 Rosetta 也能跑，一并验
+      - name: 冒烟
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/${{ matrix.exe }}"
+          "$bin" --version
+          "$bin" --list > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.id }}
+          path: target/${{ matrix.target }}/release/${{ matrix.exe }}
+          if-no-files-found: error
+
+  npm:
+    name: 发布到 npm
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      # npm provenance / trusted publishing 用 OIDC 身份
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # trusted publishing 需要 npm >= 11.5
+      - run: npm install -g npm@latest
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: artifacts
+
+      - name: 组装包
+        run: |
+          # artifact 目录是 bin-<平台 id>，pack.mjs 要 <平台 id>
+          mkdir bins
+          for d in artifacts/bin-*; do mv "$d" "bins/${d#artifacts/bin-}"; done
+          node npm/pack.mjs "${{ needs.prepare.outputs.version }}" bins dist
+
+      - name: 发布
+        env:
+          # 配了 npmjs.com 的 trusted publisher 就走 OIDC，不需要这个 secret；
+          # 首次发布（包还不存在，没法配 trusted publisher）要用 token
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm-tag }}
+        run: |
+          while read -r pkg; do
+            # 已发布的跳过：中途失败后重跑工作流不会卡在"版本已存在"
+            if npm view "$pkg@$VERSION" version > /dev/null 2>&1; then
+              echo "$pkg@$VERSION 已存在，跳过"
+              continue
+            fi
+            npm publish "dist/$pkg" --access public --provenance --tag "$NPM_TAG"
+          done < dist/publish-order.txt
+
+  github-release:
+    name: GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: artifacts
+
+      - name: 打包
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir dist
+          for d in artifacts/bin-*; do
+            id="${d#artifacts/bin-}"
+            name="alcedo-v${VERSION}-${id}"
+            cp LICENSE README.md README.en.md "$d/"
+            chmod +x "$d"/alcedo* || true
+            if [[ "$id" == win32-* ]]; then
+              (cd "$d" && zip -q "../../dist/${name}.zip" *)
+            else
+              tar -czf "dist/${name}.tar.gz" -C "$d" .
+            fi
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+          ls -l dist
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          flags=(--generate-notes --verify-tag)
+          [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            gh release upload "v$VERSION" dist/* --clobber
+          else
+            gh release create "v$VERSION" dist/* --title "v$VERSION" "${flags[@]}"
+          fi

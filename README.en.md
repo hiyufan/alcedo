@@ -75,7 +75,16 @@ see [limitations](#limitations).
 
 ### Install
 
-Requires a Rust toolchain. On Windows, MSVC with the C++ build tools from Visual
+Install the prebuilt binary from npm (Linux / macOS / Windows, x64 and arm64). No Rust
+toolchain needed:
+
+```bash
+npm install -g alcedo-cli
+```
+
+Prebuilt archives are also attached to [GitHub Releases](https://github.com/hiyufan/alcedo/releases).
+
+Installing from source requires a Rust toolchain. On Windows, MSVC with the C++ build tools from Visual
 Studio Build Tools is recommended. See the [Windows build notes](CONTRIBUTING.en.md#windows-builds)
 for other toolchains and troubleshooting.
 

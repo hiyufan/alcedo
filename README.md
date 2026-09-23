@@ -73,7 +73,15 @@ Pinterest · Dailymotion
 
 ### 安装
 
-需要 Rust 工具链。Windows 推荐使用 MSVC 工具链并安装 Visual Studio Build Tools
+通过 npm 安装预编译二进制（Linux / macOS / Windows，x64 与 arm64），不需要 Rust 工具链：
+
+```bash
+npm install -g alcedo-cli
+```
+
+预编译压缩包也附在 [GitHub Releases](https://github.com/hiyufan/alcedo/releases) 上。
+
+从源码安装需要 Rust 工具链。Windows 推荐使用 MSVC 工具链并安装 Visual Studio Build Tools
 的 C++ 构建工具；其他工具链和排障见[Windows 构建](CONTRIBUTING.md#windows-构建)。
 
 ```bash

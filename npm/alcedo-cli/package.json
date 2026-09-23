@@ -1,0 +1,21 @@
+{
+  "name": "alcedo-cli",
+  "version": "0.1.0",
+  "description": "Rust 视频平台解析命令行：给一条分享链接，返回媒体地址、图集、封面、作者和可用清晰度",
+  "keywords": ["video", "parser", "douyin", "bilibili", "youtube", "tiktok", "cli"],
+  "homepage": "https://github.com/hiyufan/alcedo#readme",
+  "bugs": "https://github.com/hiyufan/alcedo/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiyufan/alcedo.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "alcedo": "bin/alcedo.js"
+  },
+  "files": ["bin"],
+  "engines": {
+    "node": ">=16"
+  },
+  "optionalDependencies": {}
+}

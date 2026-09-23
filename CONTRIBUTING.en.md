@@ -98,6 +98,22 @@ Describe the problem, behavior changes and validation in the PR. For platform
 API changes, include reproduction conditions and sanitized samples. Keep the
 Chinese and English user documentation in sync.
 
+## Releasing
+
+1. Bump `version` under `[workspace.package]` in `Cargo.toml`, update `CHANGELOG.md`, and commit
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`
+
+`.github/workflows/release.yml` checks that the tag matches the Cargo version, runs the
+tests, builds binaries for every entry in `npm/platforms.json`, publishes the `alcedo-cli`
+npm package and creates a GitHub Release. Versions with a suffix (`v0.2.0-beta.1`) are
+published under the `next` npm dist-tag.
+
+npm authentication: before the first release, add an `NPM_TOKEN` repository secret (a
+Granular Access Token from npmjs.com that can publish new packages). Once the packages exist,
+configure a Trusted Publisher on npmjs.com for `alcedo-cli` and each `alcedo-cli-*` platform
+package (repository `hiyufan/alcedo`, workflow `release.yml`, environment `npm`); the token
+can then be removed.
+
 ## Investigating platform failures
 
 Run smoke tests for the affected platform, replacing `<platform>` with a filter

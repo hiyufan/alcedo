@@ -88,6 +88,20 @@ refactor: 合并清晰度标签逻辑
 PR 中说明问题、行为变化和验证方式。涉及平台接口变化时，附上复现条件和脱敏样本；
 修改用户文档时同步更新中英文版本。
 
+## 发布
+
+1. 改 `Cargo.toml` 里 `[workspace.package]` 的 `version`，更新 `CHANGELOG.md`，提交
+2. 打 tag 并推送：`git tag v0.2.0 && git push origin v0.2.0`
+
+`.github/workflows/release.yml` 会校验 tag 与 Cargo 版本一致、跑测试、按
+`npm/platforms.json` 构建各平台二进制，然后发布 npm 包 `alcedo-cli` 并创建 GitHub
+Release。带后缀的版本（`v0.2.0-beta.1`）在 npm 上发到 `next` 标签。
+
+npm 认证：首次发布前在仓库 Secrets 里配置 `NPM_TOKEN`（npmjs.com 的 Granular
+Access Token，需允许发布新包）。包发布后建议在 npmjs.com 上为 `alcedo-cli` 和各
+`alcedo-cli-*` 平台包配置 Trusted Publisher（仓库 `hiyufan/alcedo`、工作流
+`release.yml`、环境 `npm`），之后可以删掉 token。
+
 ## 排查平台失败
 
 先针对相应平台运行冒烟测试，将 `<平台名>` 替换为测试名称中的筛选词：

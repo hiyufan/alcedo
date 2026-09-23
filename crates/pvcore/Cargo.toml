@@ -1,0 +1,50 @@
+[package]
+name = "pvcore"
+description = "高性能视频平台解析核心：抖音 / 小红书 / 快手 / B站 / 微博 / YouTube / TikTok 等"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros", "net"] }
+# rustls-no-provider + 自己装 ring：默认的 rustls feature 会拉 aws-lc-rs，
+# 那东西在 Windows 上要 NASM + CMake，在 musl 上也常出岔子。ring 纯 Rust 路径
+# 更省事，性能差异对我们这种小报文场景可以忽略。
+reqwest = { workspace = true, features = [
+    "rustls-no-provider",
+    "http2",
+    "gzip",
+    "brotli",
+    "zstd",
+    "deflate",
+    "socks",
+    "stream",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+url = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures-util = { workspace = true, features = ["std"] }
+bytes = { workspace = true }
+
+# 平台页面偶尔返回 GBK（老站点尤其），from_utf8_lossy 会得到一堆问号
+encoding_rs = "0.8"
+scraper = { version = "0.23", default-features = false }
+base64 = "0.22"
+percent-encoding = "2"
+rand = "0.9"
+parking_lot = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# 集成测试是独立 crate，普通依赖对它不可见，要单独列
+serde_json = { workspace = true }
+# 造假响应体来测 read_capped，不用真起一个服务器
+http = "1"
+futures-util = { workspace = true, features = ["std"] }

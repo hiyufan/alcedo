@@ -1,0 +1,39 @@
+[workspace]
+members = ["crates/pvcore", "crates/pvcli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/yourname/pvcore"
+authors = ["pvcore contributors"]
+
+[workspace.dependencies]
+tokio = { version = "1", default-features = false }
+reqwest = { version = "0.13", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+url = "2"
+thiserror = "2"
+tracing = "0.1"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false }
+
+# 解析是 IO 密集 + 短生命周期对象密集; opt-level 3 + thin LTO 对 JSON / 正则路径
+# 有实测收益, codegen-units=1 让内联跨模块生效
+[profile.release]
+opt-level = 3
+lto = "thin"
+# 不用 panic="abort": 这是要长在服务端的库, 单条解析 panic 不该把整个进程
+# 带走。保留 unwind, 上层可以按请求兜住。
+codegen-units = 1
+strip = "symbols"
+
+# 跑 bench / 压测时用, 保留符号方便 perf
+[profile.bench]
+inherits = "release"
+strip = "none"
+debug = 1

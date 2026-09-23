@@ -168,7 +168,7 @@ jobs:
             name="alcedo-v${VERSION}-${id}"
             cp LICENSE README.md README.en.md "$d/"
             chmod +x "$d"/alcedo* || true
-            if [[ "$id" == win32-* ]]; then
+            if [[ "$id" == windows-* ]]; then
               (cd "$d" && zip -q "../../dist/${name}.zip" *)
             else
               tar -czf "dist/${name}.tar.gz" -C "$d" .

@@ -10,7 +10,9 @@ const path = require("path");
 
 // Windows on ARM 用 x64 二进制（系统自带 x64 仿真），平台包里 cpu 同时声明了两者
 const arch = process.platform === "win32" && process.arch === "arm64" ? "x64" : process.arch;
-const pkg = `alcedo-cli-${process.platform}-${arch}`;
+// Windows 的平台包叫 windows-x64 而不是 win32-x64：后者被 npm 的反垃圾检测拦截，发布不了
+const os = process.platform === "win32" ? "windows" : process.platform;
+const pkg = `alcedo-cli-${os}-${arch}`;
 const exe = process.platform === "win32" ? "alcedo.exe" : "alcedo";
 
 let binary;

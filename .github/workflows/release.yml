@@ -141,7 +141,8 @@ jobs:
               echo "$pkg@$VERSION 已存在，跳过"
               continue
             fi
-            npm publish "dist/$pkg" --access public --provenance --tag "$NPM_TAG"
+            # 必须带 ./，否则 npm 12 会把 dist/xxx 当成 GitHub 仓库简写
+            npm publish "./dist/$pkg" --access public --provenance --tag "$NPM_TAG"
           done < dist/publish-order.txt
 
   github-release:

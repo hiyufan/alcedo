@@ -11,6 +11,9 @@ authors.workspace = true
 [[bin]]
 name = "alcedo"
 path = "src/main.rs"
+# 库也叫 alcedo，两边都生成 rustdoc 会往同一个目录写，cargo doc 报文件名冲突。
+# CLI 的用法在 --help 和 README 里，不需要 rustdoc 产物。
+doc = false
 
 [dependencies]
 alcedo = { path = "../alcedo" }

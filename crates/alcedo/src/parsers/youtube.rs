@@ -9,9 +9,9 @@
 //! 要求 PO Token（BotGuard 产物）。而 **移动端 / TV 客户端返回的是已经签好名的
 //! 直链**——同样的内容，零 JS、零 token。
 //!
-//! 客户端按"不需要 JS 且当前仍免 PO Token"的顺序试：`visionos` 是 yt-dlp 2026
-//! 之后的默认首选，`ios` / `android_vr` / `tv` 作为后备。哪天 YouTube 对某个客户端
-//! 加了限制，只要挪一下本文件里 `CLIENTS` 的顺序，不用改解析逻辑。
+//! 客户端按"不需要 JS 且当前仍免 PO Token"的顺序试：`visionos` 目前最稳，
+//! `ios` / `android_vr` / `tv` 作为后备。哪天 YouTube 对某个客户端加了限制，
+//! 只要挪一下本文件里 `CLIENTS` 的顺序，不用改解析逻辑。
 
 use serde_json::{json, Value};
 

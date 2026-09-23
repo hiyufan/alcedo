@@ -1,8 +1,8 @@
 //! 链接 → 平台的识别。
 //!
-//! 和 Python 版的区别：那边用 `domain in share_url` 做子串匹配，
+//! 一律先解析出主机名，再按**域名后缀**匹配。用 `domain in url` 这种子串判断的话，
 //! `https://evil.com/?r=www.douyin.com` 会被判成抖音，然后带着抖音的 cookie
-//! 去请求攻击者的服务器。这里一律先解析出主机名，再按**域名后缀**匹配。
+//! 去请求攻击者的服务器。
 
 use crate::model::Source;
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn substring_attack_is_rejected() {
-        // Python 版这条会被当成抖音, 然后把抖音的请求头发给攻击者的服务器
+        // 子串匹配会把这条当成抖音, 然后把抖音的请求头发给攻击者的服务器
         assert_eq!(detect("https://evil.com/?redirect=www.douyin.com"), None);
         assert_eq!(detect("https://douyin.com.evil.com/x"), None);
         assert_eq!(detect("https://notbilibili.com/video/1"), None);

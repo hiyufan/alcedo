@@ -1,7 +1,7 @@
 //! 解析结果的数据模型。
 //!
-//! 字段名和 JSON 形状与原 Python 版 (`parse_video_py.parser.base`) 保持一致，
-//! 上层 web / CLI 不用改序列化逻辑就能直接换过来。
+//! 字段名和 JSON 形状是对外契约，上层 web / CLI 直接按这个结构消费。
+//! 改动会破坏前端，加字段可以，改名和删字段要当成破坏性变更。
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

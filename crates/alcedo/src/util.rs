@@ -57,7 +57,7 @@ pub fn extract_url(text: &str) -> Option<&str> {
 
 /// 在 HTML 里找 `marker` 之后那一段 JSON，按括号配对取完整。
 ///
-/// 比 Python 版的 `marker\s*=\s*(.*?)</script>` 稳得多：
+/// 比 `marker\s*=\s*(.*?)</script>` 这种正则写法稳得多：
 ///
 /// - 正文里出现 `</script>` 字符串（转义过的）不会把 JSON 截断
 /// - 后面跟着别的 JS 语句时也能正确停在 JSON 结尾，不会把 `;var x=1` 一起吞进去

@@ -1,9 +1,9 @@
 //! HTTP 层：连接池、代理、重定向、SSRF、重试。
 //!
-//! 和 Python 版最大的结构性差别在这里。原来每个解析步骤都 `create_async_client()`
-//! 新建一个 `httpx.AsyncClient`，也就是每次都重建连接池：一次抖音解析要发 3–4 个
-//! 请求，等于 3–4 次 TCP + TLS 握手全部重来。这里按代理配置各留一个
-//! [`reqwest::Client`]，进程内共享，连接、TLS 会话、DNS 缓存全部复用。
+//! 这里最要紧的一条是**别重复构造客户端**。一次抖音解析要发 3–4 个请求（短链
+//! 跳转、接口、页面），每步各建一个客户端就等于 3–4 次 TCP + TLS 握手全部重来。
+//! 按代理配置各留一个 [`reqwest::Client`]，进程内共享，连接、TLS 会话、DNS 缓存
+//! 全部复用。
 //!
 //! 重定向自己跟而不是交给 reqwest：短链跳转是解析流程的一部分（好几个平台要读
 //! 中间那一跳的 `Location`），而且每一跳都得重新过一遍 SSRF 检查。
@@ -72,7 +72,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 从环境变量读。`ALCEDO_*` 是新名字，`PARSE_VIDEO_*` 是 Python 版留下的，
+    /// 从环境变量读。`ALCEDO_*` 是正式名字，`PARSE_VIDEO_*` 是旧前缀，
     /// 两个都认，迁移期不用改部署脚本。
     pub fn from_env() -> Self {
         let d = Config::default();

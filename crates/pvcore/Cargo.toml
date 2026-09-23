@@ -48,3 +48,6 @@ serde_json = { workspace = true }
 # 造假响应体来测 read_capped，不用真起一个服务器
 http = "1"
 futures-util = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

@@ -51,28 +51,7 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
             util::str_at(&video, &["owner", "name"]),
             util::str_at(&video, &["owner", "img_2x"]),
         ),
-        formats: files
-            .iter()
-            .skip(1)
-            .filter_map(|f| {
-                let u = util::str_at(f, &["url"]);
-                (!u.is_empty()).then(|| Format {
-                    label: {
-                        let q = util::str_at(f, &["quality"]);
-                        if q.is_empty() {
-                            format!("{}p", util::u32_at(f, &["height"]))
-                        } else {
-                            q
-                        }
-                    },
-                    url: u,
-                    ext: "mp4".into(),
-                    height: util::u32_at(f, &["height"]),
-                    filesize: util::u64_at(f, &["size"]),
-                    ..Default::default()
-                })
-            })
-            .collect(),
+        formats: files.iter().skip(1).filter_map(|f| to_format(f)).collect(),
         ..Default::default()
     };
 
@@ -102,6 +81,26 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     Ok(info)
 }
 
+/// 一条 `progressive` 记录 → 一档清晰度。地址为空的跳过。
+///
+/// 单拎出来是因为内联在 `VideoInfo { .. }` 里会堆到七层嵌套
+/// （结构体 → 迭代器 → 闭包 → 结构体 → 块 → if），改一行得先数括号。
+fn to_format(f: &serde_json::Value) -> Option<Format> {
+    let url = util::str_at(f, &["url"]);
+    if url.is_empty() {
+        return None;
+    }
+    let height = util::u32_at(f, &["height"]);
+    Some(Format {
+        label: Format::label_for(&util::str_at(f, &["quality"]), height, ""),
+        url,
+        ext: "mp4".into(),
+        height,
+        filesize: util::u64_at(f, &["size"]),
+        ..Default::default()
+    })
+}
+
 fn best_thumbnail(video: &serde_json::Value) -> String {
     // thumbs 是 {"640": "...", "1280": "...", "base": "..."}
     util::get(video, &["thumbs"])
@@ -126,6 +125,8 @@ fn video_id_from_url(url: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;

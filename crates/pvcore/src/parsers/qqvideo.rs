@@ -26,7 +26,7 @@ pub async fn parse_id(http: &Http, vid: &str) -> Result<VideoInfo> {
     let body = resp.text();
     let json: serde_json::Value = serde_json::from_str(strip_jsonp(&body))?;
 
-    let em = util::num_at(&json, &["em"]) as i64;
+    let em = util::i64_at(&json, &["em"]);
     if em != 0 {
         return Err(Error::restricted(format!(
             "腾讯视频返回 em={em} {}",
@@ -97,6 +97,8 @@ fn vid_from_url(url: &str) -> Result<String> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

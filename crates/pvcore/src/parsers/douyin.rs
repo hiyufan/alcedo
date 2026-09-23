@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Reason, Result};
 use crate::http::{Http, Req};
-use crate::model::{Author, Format, Image, VideoInfo};
+use crate::model::{short_side, Author, Format, Image, VideoInfo};
 use crate::util;
 
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
@@ -110,10 +110,7 @@ async fn slides_info(http: &Http, video_id: &str) -> Result<Option<Value>> {
         // filter_list 一般只给个 reason 码，没有 detail_msg；有就带上
         let detail = util::first_str(&f, &[&["detail_msg"], &["notice"]]);
         let detail = if detail.is_empty() {
-            format!(
-                "抖音 filter reason={}",
-                util::num_at(&f, &["reason"]) as i64
-            )
+            format!("抖音 filter reason={}", util::i64_at(&f, &["reason"]))
         } else {
             detail
         };
@@ -224,8 +221,7 @@ fn build(data: &Value) -> Result<VideoInfo> {
         util::arr_at(&music, &["url_list"])
             .first()
             .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| util::str_at(&music, &["uri"]))
+            .map_or_else(|| util::str_at(&music, &["uri"]), str::to_owned)
     };
 
     let cover_url = util::prefer_non_webp(util::arr_at(&video, &["cover", "url_list"]));
@@ -266,7 +262,7 @@ fn build(data: &Value) -> Result<VideoInfo> {
 /// 或者同清晰度但体积更小的 H.265。
 fn collect_formats(video: &Value, primary: &Value) -> Vec<Format> {
     let primary_key = util::str_at(primary, &["url_key"]);
-    let primary_short = min_side(
+    let primary_short = short_side(
         util::u32_at(primary, &["width"]),
         util::u32_at(primary, &["height"]),
     );
@@ -290,7 +286,7 @@ fn collect_formats(video: &Value, primary: &Value) -> Vec<Format> {
         let w = util::u32_at(&pa, &["width"]);
         let h = util::u32_at(&pa, &["height"]);
         // 竖屏视频 height 才是长边，统一用短边当"清晰度"
-        let short = min_side(w, h);
+        let short = short_side(w, h);
         let codec = if util::get(br, &["is_h265"])
             .and_then(Value::as_i64)
             .unwrap_or(0)
@@ -326,11 +322,7 @@ fn collect_formats(video: &Value, primary: &Value) -> Vec<Format> {
 
 fn make_format(short: u32, codec: &str, url: &str, size: u64) -> Format {
     Format {
-        label: if codec.is_empty() {
-            format!("{short}p")
-        } else {
-            format!("{short}p {codec}")
-        },
+        label: Format::label_for("", short, codec),
         url: url.replace("playwm", "play"),
         ext: "mp4".into(),
         height: short,
@@ -340,15 +332,9 @@ fn make_format(short: u32, codec: &str, url: &str, size: u64) -> Format {
     }
 }
 
-fn min_side(w: u32, h: u32) -> u32 {
-    if w > 0 && h > 0 {
-        w.min(h)
-    } else {
-        h
-    }
-}
-
 #[cfg(test)]
+// 断言里比较确切的期望值是对的；扩展名断言用的是测试自己造的小写数据
+#[allow(clippy::float_cmp, clippy::case_sensitive_file_extension_comparisons)]
 mod tests {
     use super::*;
     use serde_json::json;

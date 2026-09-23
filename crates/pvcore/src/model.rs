@@ -324,7 +324,40 @@ pub struct Format {
     pub audio_url: String,
 }
 
+/// 用来当"清晰度"的那条边。
+///
+/// 竖屏视频的 `height` 是长边——1080×1920 的短视频按高度算是"1920p"，没人这么说。
+/// 用户认知里的清晰度一直是短边，横屏竖屏都一样。
+///
+/// 这条规则原来在抖音、快手、TikTok、B 站各写了一份，改一处别处不会跟着动。
+pub fn short_side(width: u32, height: u32) -> u32 {
+    if width > 0 && height > 0 {
+        width.min(height)
+    } else {
+        width.max(height)
+    }
+}
+
 impl Format {
+    /// 拼展示名：平台给了清晰度名就用它，没有就按短边拼 `720p`，
+    /// 编码非空时缀在后面。
+    pub fn label_for(quality: &str, short_side: u32, codec: &str) -> String {
+        let base = if quality.is_empty() {
+            if short_side > 0 {
+                format!("{short_side}p")
+            } else {
+                "未知".to_owned()
+            }
+        } else {
+            quality.to_owned()
+        };
+        if codec.is_empty() {
+            base
+        } else {
+            format!("{base} {codec}")
+        }
+    }
+
     pub fn direct(label: impl Into<String>, url: impl Into<String>, height: u32) -> Self {
         Self {
             label: label.into(),
@@ -438,6 +471,8 @@ impl VideoInfo {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -485,6 +520,27 @@ mod tests {
     fn all_list_is_complete() {
         // 漏一个的话 from_str 和反序列化就会对它失效, 但编译器不会提醒
         assert_eq!(Source::ALL.len(), 35, "新增平台后要同步 Source::ALL");
+    }
+
+    #[test]
+    fn short_side_uses_the_narrow_edge() {
+        // 竖屏 1080x1920 是 1080p，不是 1920p
+        assert_eq!(short_side(1080, 1920), 1080);
+        // 横屏也一样
+        assert_eq!(short_side(1920, 1080), 1080);
+        // 只给一边时用那一边，别返回 0
+        assert_eq!(short_side(0, 720), 720);
+        assert_eq!(short_side(720, 0), 720);
+        assert_eq!(short_side(0, 0), 0);
+    }
+
+    #[test]
+    fn label_prefers_platform_name_then_falls_back() {
+        assert_eq!(Format::label_for("1080P60", 1080, ""), "1080P60");
+        assert_eq!(Format::label_for("", 720, ""), "720p");
+        assert_eq!(Format::label_for("", 720, "H.265"), "720p H.265");
+        assert_eq!(Format::label_for("4K", 2160, "AV1"), "4K AV1");
+        assert_eq!(Format::label_for("", 0, ""), "未知");
     }
 
     #[test]

@@ -37,3 +37,38 @@ strip = "symbols"
 inherits = "release"
 strip = "none"
 debug = 1
+
+# ---------------------------------------------------------------- lint 基线
+#
+# 写在这里而不是靠 CI 脚本传 -W：本地 `cargo clippy` 和 CI 用的是同一套标准，
+# 不会出现"我这儿是绿的"。新增平台时这些规则一样生效。
+[workspace.lints.rust]
+# 目前全项目零 unsafe，锁死。解析器处理的是不可信输入，内存安全是底线，
+# 真要开口子必须是一次显式的、要过评审的改动。
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+# 下面这几条都是在这个项目里真抓到过问题的，不是凑数：
+# 平台 CDN 偶尔回 .WEBP / .JPG，按字面比会漏
+case_sensitive_file_extension_comparisons = "deny"
+# 各家的 id / 时长有的是数字有的是字符串，绕 f64 转整数会丢精度
+cast_possible_truncation = "warn"
+cast_precision_loss = "warn"
+# duration == 0.0 这类判断，本意是"没取到"，写成浮点相等很脆
+float_cmp = "warn"
+# 永远返回 Ok 的函数会让调用方多写一层 ?
+unnecessary_wraps = "warn"
+# 超过 100 行的函数：目前 0 个，别让它长回来
+too_many_lines = "warn"
+map_unwrap_or = "warn"
+redundant_clone = "warn"
+
+# 明确不要的：纯风格偏好，噪音盖过信号
+module_name_repetitions = "allow"   # Source::DouYin 写成 Self::DouYin 反而更难读
+missing_errors_doc = "allow"        # 错误类型只有一个, 每个函数抄一遍 # Errors 没有意义
+missing_panics_doc = "allow"
+must_use_candidate = "allow"

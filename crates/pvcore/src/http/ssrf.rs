@@ -66,6 +66,9 @@ pub fn is_internal(ip: IpAddr) -> bool {
 }
 
 /// 明显指向本机 / 内网的主机名，连解析都不用做。
+// 这里比的是**主机名后缀**不是文件扩展名，而且 host 进来第一步就统一小写了，
+// clippy 的扩展名大小写规则在这儿不适用
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 pub fn is_internal_hostname(host: &str) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     host == "localhost"
@@ -197,6 +200,8 @@ impl Resolve for SafeResolver {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

@@ -110,8 +110,7 @@ fn env_secs(key: &str, default: Duration) -> Duration {
     std::env::var(key)
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(default)
+        .map_or(default, Duration::from_secs)
 }
 
 fn env_num(key: &str, default: usize) -> usize {
@@ -194,6 +193,7 @@ fn client_for(cfg: &Config, proxy: Option<&str>) -> Result<Client> {
 // ------------------------------------------------------------------ 请求
 
 /// 一次请求的描述。
+#[derive(Debug)]
 pub struct Req {
     method: Method,
     url: String,
@@ -300,6 +300,17 @@ pub struct Resp {
     body: Vec<u8>,
 }
 
+impl std::fmt::Debug for Resp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 只报长度：body 动辄几百 KB，打进日志既没用又会泄露页面内容
+        f.debug_struct("Resp")
+            .field("status", &self.status)
+            .field("url", &self.url)
+            .field("body_len", &self.body.len())
+            .finish()
+    }
+}
+
 impl Resp {
     /// 正文，按 `Content-Type` 里的 charset 解码。
     ///
@@ -387,7 +398,7 @@ fn snippet(body: &[u8], n: usize) -> String {
 /// 一次解析所共享的 HTTP 句柄。
 ///
 /// UA 在这里定一次，整个解析流程复用（见 [`ua`] 模块的说明）。
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Http {
     client: Client,
     cfg: Arc<Config>,
@@ -584,11 +595,11 @@ async fn read_capped(
 ) -> Result<Vec<u8>> {
     use futures_util::StreamExt;
 
-    let limit = head_bytes.map(|n| n.min(max)).unwrap_or(max);
-    let hint = resp
-        .content_length()
-        .map(|n| (n as usize).min(limit))
-        .unwrap_or(16 * 1024);
+    let limit = head_bytes.map_or(max, |n| n.min(max));
+    // 只是 Vec 的预分配提示，取不到或超了都不影响正确性
+    let hint = resp.content_length().map_or(16 * 1024, |n| {
+        usize::try_from(n).unwrap_or(limit).min(limit)
+    });
     let mut out = Vec::with_capacity(hint);
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -611,6 +622,8 @@ async fn read_capped(
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

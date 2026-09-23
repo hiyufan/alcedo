@@ -99,20 +99,9 @@ fn representations(current: &Value, key: &str, codec: &str) -> Vec<Format> {
                 return None;
             }
             let height = util::u32_at(r, &["height"]);
-            let label = {
-                let l = util::first_str(r, &[&["qualityLabel"], &["qualityType"]]);
-                if l.is_empty() {
-                    format!("{height}p")
-                } else {
-                    l
-                }
-            };
+            let quality = util::first_str(r, &[&["qualityLabel"], &["qualityType"]]);
             Some(Format {
-                label: if codec.is_empty() {
-                    label
-                } else {
-                    format!("{label} {codec}")
-                },
+                label: Format::label_for(&quality, height, codec),
                 url,
                 ext: "m3u8".into(),
                 height,
@@ -125,6 +114,8 @@ fn representations(current: &Value, key: &str, codec: &str) -> Vec<Format> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

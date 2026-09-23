@@ -26,7 +26,7 @@ pub async fn parse_id(http: &Http, xid: &str) -> Result<VideoInfo> {
     let json = resp.json()?;
 
     if let Some(err) = util::get(&json, &["error"]).filter(|v| !v.is_null()) {
-        let code = util::num_at(err, &["code"]) as i64;
+        let code = util::i64_at(err, &["code"]);
         let title = util::first_str(err, &[&["title"], &["raw_message"]]);
         return Err(match code {
             // DM_ERR_GEO_RESTRICTED / DM_ERR_MEDIA_NOT_FOUND 之类
@@ -109,6 +109,8 @@ fn xid_from_url(url: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

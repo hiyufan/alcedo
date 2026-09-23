@@ -13,7 +13,7 @@ use crate::util;
 
 /// 接口返回了业务错误码时统一报错。
 fn check_code(json: &Value, code_path: &[&str], ok: i64, msg_paths: &[&[&str]]) -> Result<()> {
-    let code = util::num_at(json, code_path) as i64;
+    let code = util::i64_at(json, code_path);
     if code == ok {
         return Ok(());
     }
@@ -84,7 +84,7 @@ pub async fn zuiyou_id(http: &Http, id: &str) -> Result<VideoInfo> {
         util::get(&json, &["data", "post"]).ok_or_else(|| Error::deleted("最右没有返回内容"))?;
     let key = util::str_at(post, &["imgs", "0", "id"]);
     let key = if key.is_empty() {
-        (util::num_at(post, &["imgs", "0", "id"]) as i64).to_string()
+        util::i64_at(post, &["imgs", "0", "id"]).to_string()
     } else {
         key
     };
@@ -183,7 +183,7 @@ pub async fn pipigaoxiao_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
     let post = util::get(&json, &["data", "post"])
         .ok_or_else(|| Error::deleted("皮皮搞笑没有返回内容"))?;
-    let img_id = util::num_at(post, &["imgs", "0", "id"]) as i64;
+    let img_id = util::i64_at(post, &["imgs", "0", "id"]);
 
     Ok(VideoInfo {
         video_url: util::str_at(post, &["videos", &img_id.to_string(), "url"]),
@@ -320,6 +320,8 @@ pub async fn haokan_id(http: &Http, id: &str) -> Result<VideoInfo> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;

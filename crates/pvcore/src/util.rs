@@ -47,8 +47,7 @@ pub fn extract_url(text: &str) -> Option<&str> {
         .find(|(_, c)| {
             c.is_whitespace() || !c.is_ascii() || matches!(c, '"' | '\'' | '<' | '>' | '，' | '。')
         })
-        .map(|(i, _)| i)
-        .unwrap_or(rest.len());
+        .map_or(rest.len(), |(i, _)| i);
     let url = rest[..end].trim_end_matches(['.', ',', ')', ']', '}', '、']);
     (url.len() > "https://".len()).then_some(url)
 }
@@ -238,25 +237,54 @@ pub fn first_id(value: &Value, paths: &[&[&str]]) -> String {
     String::new()
 }
 
+/// 取有符号整数。平台的错误码、状态码基本都是这个形状。
+///
+/// 不走 `num_at(..) as i64`：那条路先过一遍 f64，大整数会丢精度，NaN 会变成 0，
+/// 而且散在十几个调用点上各写一遍 `as i64` 很容易漏掉某处的边界。
+// 这个函数存在的意义就是把不可信的 JSON 数字安全地收进 i64：
+// clamp 之后的 as 不会回绕，正是想要的饱和语义
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub fn i64_at(value: &Value, path: &[&str]) -> i64 {
+    match get(value, path) {
+        Some(Value::Number(n)) => n
+            .as_i64()
+            // 超出 i64 的浮点（平台偶尔给科学计数法）按饱和处理，不要回绕
+            .or_else(|| {
+                n.as_f64()
+                    .map(|f| f.clamp(i64::MIN as f64, i64::MAX as f64) as i64)
+            })
+            .unwrap_or(0),
+        Some(Value::String(s)) => s.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+// 同上：先判有限、再 min 到上界，剩下的 as 是安全的
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 pub fn u64_at(value: &Value, path: &[&str]) -> u64 {
     let n = num_at(value, path);
     if n.is_finite() && n > 0.0 {
-        n as u64
+        // clamp 而不是裸 as：体积字段偶尔是脏数据，回绕出一个巨大的值
+        // 会让上层的配额判断失效
+        n.min(u64::MAX as f64) as u64
     } else {
         0
     }
 }
 
 pub fn u32_at(value: &Value, path: &[&str]) -> u32 {
-    u64_at(value, path).min(u32::MAX as u64) as u32
+    u32::try_from(u64_at(value, path)).unwrap_or(u32::MAX)
 }
 
 /// 数组；不是数组就给个空切片。
 pub fn arr_at<'a>(value: &'a Value, path: &[&str]) -> &'a [Value] {
     get(value, path)
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .map_or(&[][..], Vec::as_slice)
 }
 
 /// 第一个非空字符串。挨个试几个候选字段时用。
@@ -278,7 +306,9 @@ pub fn prefer_non_webp(urls: &[Value]) -> String {
     let as_str = |v: &Value| v.as_str().unwrap_or("").to_owned();
     for v in urls {
         let u = as_str(v);
-        if !u.is_empty() && !u.split('?').next().unwrap_or("").ends_with(".webp") {
+        // 大小写不敏感：CDN 偶尔回 `.WEBP`，按字面比会漏掉
+        let path = u.split('?').next().unwrap_or("");
+        if !u.is_empty() && !path.to_ascii_lowercase().ends_with(".webp") {
             return u;
         }
     }
@@ -286,6 +316,8 @@ pub fn prefer_non_webp(urls: &[Value]) -> String {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;

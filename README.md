@@ -182,6 +182,25 @@ cargo fmt --all
 cargo test --workspace -- --ignored    # 联网的冒烟测试（会真的打平台接口）
 ```
 
+### lint 基线
+
+规则写在根 `Cargo.toml` 的 `[workspace.lints]` 里，不是靠 CI 脚本传参数——本地和
+CI 跑的是同一套，不会出现"我这儿是绿的"。当前状态：**`clippy::all` 为 deny，
+外加一组在这个项目里真抓到过 bug 的 pedantic 规则，零 warning。**
+
+选进来的几条各有出处：
+
+| 规则 | 它抓到过什么 |
+| --- | --- |
+| `case_sensitive_file_extension_comparisons` | `.ends_with(".webp")` 漏掉 CDN 返回的 `.WEBP` |
+| `cast_possible_truncation` | 十几处 `num_at(..) as i64` 绕 f64 转整数，大数丢精度 |
+| `unnecessary_wraps` | 两个永远返回 `Ok` 的函数，逼调用方多写一层 `?` |
+| `too_many_lines` | 唯一一个 137 行的函数（已拆） |
+| `unsafe_code = "forbid"` | 全项目零 unsafe，锁死；解析器吃的是不可信输入 |
+
+明确关掉的是纯风格偏好（`module_name_repetitions`、`missing_errors_doc` 等），
+它们会产生 200 多条噪音把真信号盖掉。
+
 ### Windows 上的构建
 
 需要一个能用的链接器。装了 Visual Studio 生成工具就用默认的 MSVC 工具链；没装的话

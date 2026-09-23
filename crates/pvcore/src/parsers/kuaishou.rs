@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::http::{Http, Req};
-use crate::model::{Author, Format, Image, VideoInfo};
+use crate::model::{short_side, Author, Format, Image, VideoInfo};
 use crate::util;
 
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
@@ -47,7 +47,7 @@ fn build(state: &Value) -> Result<VideoInfo> {
         })
         .ok_or_else(|| Error::parse("INIT_STATE 里没有作品数据"))?;
 
-    let result = util::num_at(entry, &["result"]) as i64;
+    let result = util::i64_at(entry, &["result"]);
     if result != 1 {
         return Err(match result {
             2 | 400002 => Error::deleted(format!("快手 result={result}")),
@@ -85,13 +85,15 @@ fn build(state: &Value) -> Result<VideoInfo> {
         }
         let w = util::u32_at(rep, &["width"]);
         let h = util::u32_at(rep, &["height"]);
-        let short = if w > 0 && h > 0 { w.min(h) } else { h };
+        let short = short_side(w, h);
+        // 算得出短边就用短边；qualityLabel 是快手自己的叫法，只当兜底
+        let quality = if short > 0 {
+            String::new()
+        } else {
+            util::str_at(rep, &["qualityLabel"])
+        };
         formats.push(Format {
-            label: if short > 0 {
-                format!("{short}p")
-            } else {
-                util::str_at(rep, &["qualityLabel"])
-            },
+            label: Format::label_for(&quality, short, ""),
             url: u,
             ext: "mp4".into(),
             height: short,
@@ -152,6 +154,8 @@ fn block_error(html: &str) -> Error {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;

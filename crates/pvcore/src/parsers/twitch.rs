@@ -111,13 +111,7 @@ async fn clip(http: &Http, slug: &str) -> Result<VideoInfo> {
         formats: qualities
             .iter()
             .skip(1)
-            .filter_map(|q| {
-                let u = util::str_at(q, &["sourceURL"]);
-                (!u.is_empty()).then(|| {
-                    let h: u32 = util::str_at(q, &["quality"]).parse().unwrap_or(0);
-                    Format::direct(format!("{h}p"), u, h)
-                })
-            })
+            .filter_map(|q| to_format(q))
             .collect(),
         author: Author::new(
             util::id_at(clip, &["broadcaster", "id"]),
@@ -126,6 +120,20 @@ async fn clip(http: &Http, slug: &str) -> Result<VideoInfo> {
         ),
         ..Default::default()
     })
+}
+
+/// 一条 `videoQualities` 记录 → 一档清晰度。`quality` 是 `"1080"` 这样的字符串。
+fn to_format(q: &serde_json::Value) -> Option<Format> {
+    let url = util::str_at(q, &["sourceURL"]);
+    if url.is_empty() {
+        return None;
+    }
+    let height: u32 = util::str_at(q, &["quality"]).parse().unwrap_or(0);
+    Some(Format::direct(
+        Format::label_for("", height, ""),
+        url,
+        height,
+    ))
 }
 
 async fn vod(http: &Http, id: &str) -> Result<VideoInfo> {
@@ -177,6 +185,8 @@ async fn vod(http: &Http, id: &str) -> Result<VideoInfo> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

@@ -29,7 +29,7 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     );
     let json = http.get_json(&api).await?;
 
-    let status = util::num_at(&json, &["status_code"]) as i64;
+    let status = util::i64_at(&json, &["status_code"]);
     if status != 0 {
         return Err(Error::restricted(format!(
             "获取作品信息失败: {}",
@@ -43,11 +43,11 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     )
     .ok_or_else(|| Error::deleted("皮皮虾没有返回作品"))?;
 
-    build(item)
+    Ok(build(item))
 }
 
-fn build(item: &Value) -> Result<VideoInfo> {
-    let author_id = util::num_at(item, &["author", "id"]) as i64;
+fn build(item: &Value) -> VideoInfo {
+    let author_id = util::i64_at(item, &["author", "id"]);
 
     // 图集
     let images: Vec<Image> = util::arr_at(item, &["note", "multi_image"])
@@ -63,7 +63,7 @@ fn build(item: &Value) -> Result<VideoInfo> {
 
     // 作者在评论里回复的那条通常无水印。comments 可能为空，所以上面先兜了底。
     for c in util::arr_at(item, &["comments"]) {
-        if util::num_at(c, &["item", "author", "id"]) as i64 != author_id {
+        if util::i64_at(c, &["item", "author", "id"]) != author_id {
             continue;
         }
         let u = util::str_at(c, &["item", "video", "video_high", "url_list", "0", "url"]);
@@ -73,7 +73,7 @@ fn build(item: &Value) -> Result<VideoInfo> {
         }
     }
 
-    Ok(VideoInfo {
+    VideoInfo {
         video_url: if images.is_empty() {
             video_url
         } else {
@@ -89,10 +89,12 @@ fn build(item: &Value) -> Result<VideoInfo> {
             util::str_at(item, &["author", "avatar", "download_list", "0", "url"]),
         ),
         ..Default::default()
-    })
+    }
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -109,7 +111,7 @@ mod tests {
                 {"item": {"author": {"id": 42}, "video": {"video_high": {"url_list": [{"url": "https://v/clean.mp4"}]}}}}
             ]
         });
-        let info = build(&item).unwrap();
+        let info = build(&item);
         assert_eq!(info.video_url, "https://v/clean.mp4");
         assert_eq!(info.author.uid, "42");
     }
@@ -121,7 +123,7 @@ mod tests {
             "video": {"video_high": {"url_list": [{"url": "https://v/watermarked.mp4"}]}},
             "comments": []
         });
-        assert_eq!(build(&item).unwrap().video_url, "https://v/watermarked.mp4");
+        assert_eq!(build(&item).video_url, "https://v/watermarked.mp4");
     }
 
     #[test]
@@ -131,7 +133,7 @@ mod tests {
             "note": {"multi_image": [{"url_list": [{"url": "https://p/1.jpg"}]}]},
             "video": {"video_high": {"url_list": [{"url": "https://v/x.mp4"}]}}
         });
-        let info = build(&item).unwrap();
+        let info = build(&item);
         assert!(info.is_gallery());
         assert_eq!(info.images.len(), 1);
     }

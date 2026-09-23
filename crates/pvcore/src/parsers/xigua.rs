@@ -83,6 +83,8 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

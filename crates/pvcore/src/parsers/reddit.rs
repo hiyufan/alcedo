@@ -102,7 +102,11 @@ fn build(post: &Value) -> VideoInfo {
         // 单图帖
         if images.is_empty() {
             let u = util::str_at(post, &["url_overridden_by_dest"]);
-            if u.ends_with(".jpg") || u.ends_with(".png") || u.ends_with(".gif") {
+            let path = u.split('?').next().unwrap_or("").to_ascii_lowercase();
+            if [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+                .iter()
+                .any(|ext| path.ends_with(ext))
+            {
                 images.push(Image::new(u));
             }
         }
@@ -151,6 +155,8 @@ fn to_json_url(url: &str) -> Result<String> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;

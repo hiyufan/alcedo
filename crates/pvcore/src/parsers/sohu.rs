@@ -21,7 +21,7 @@ pub async fn parse_id(http: &Http, vid: &str) -> Result<VideoInfo> {
     );
     let json = http.get_json(&api).await?;
 
-    let status = util::num_at(&json, &["status"]) as i64;
+    let status = util::i64_at(&json, &["status"]);
     if status != 200 {
         return Err(Error::restricted(format!(
             "搜狐视频返回 status={status} {}",
@@ -91,6 +91,8 @@ fn vid_from_path(path: &str) -> Result<String> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

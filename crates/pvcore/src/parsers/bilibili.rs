@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Reason, Result};
 use crate::http::{ua, Http, Req};
-use crate::model::{Author, Format, VideoInfo};
+use crate::model::{short_side, Author, Format, VideoInfo};
 use crate::util;
 
 const REFERER: &str = "https://www.bilibili.com/";
@@ -40,7 +40,7 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     )
     .await?;
 
-    let code = util::num_at(&view, &["code"]) as i64;
+    let code = util::i64_at(&view, &["code"]);
     if code != 0 {
         let msg = util::str_at(&view, &["message"]);
         return Err(match code {
@@ -67,7 +67,7 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     )
     .await?;
 
-    let play_code = util::num_at(&play, &["code"]) as i64;
+    let play_code = util::i64_at(&play, &["code"]);
     if play_code != 0 {
         return Err(Error::restricted(format!(
             "B 站播放接口 code={play_code} {}",
@@ -235,19 +235,15 @@ fn dash_formats(play_data: &Value) -> Vec<Format> {
         }
         let height = util::u32_at(v, &["height"]);
         let width = util::u32_at(v, &["width"]);
-        let short = if width > 0 && height > 0 {
-            width.min(height)
-        } else {
-            height
-        };
-        let codec = match util::num_at(v, &["codecid"]) as i64 {
+        let short = short_side(width, height);
+        let codec = match util::i64_at(v, &["codecid"]) {
             12 => "H.265",
             13 => "AV1",
             _ => "",
         };
 
         out.push(Format {
-            label: quality_label(util::num_at(v, &["id"]) as i64, short, codec),
+            label: quality_label(util::i64_at(v, &["id"]), short, codec),
             url: String::new(), // 音视频分离，必须合并
             ext: "mp4".into(),
             height: short,
@@ -287,6 +283,8 @@ fn quality_label(id: i64, short: u32, codec: &str) -> String {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;

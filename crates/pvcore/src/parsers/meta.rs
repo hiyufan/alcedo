@@ -19,7 +19,7 @@ pub fn meta_content(html: &str, key: &str) -> String {
                 let at = from + rel;
                 // 往回找到这个标签的起点，往前找到结尾
                 let start = html[..at].rfind('<').unwrap_or(at);
-                let end = html[at..].find('>').map(|i| at + i).unwrap_or(html.len());
+                let end = html[at..].find('>').map_or(html.len(), |i| at + i);
                 let tag = &html[start..end];
                 if let Some(v) = attr_value(tag, other) {
                     if !v.is_empty() {
@@ -102,6 +102,8 @@ pub fn from_og(html: &str) -> Option<VideoInfo> {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

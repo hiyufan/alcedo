@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::http::{ua, Http, Req};
-use crate::model::{Author, Format, Image, VideoInfo};
+use crate::model::{short_side, Author, Format, Image, VideoInfo};
 use crate::util;
 
 const WEB_REFERER: &str = "https://www.tiktok.com/";
@@ -61,7 +61,7 @@ async fn from_page(http: &Http, page_url: &str) -> Result<VideoInfo> {
     let detail = util::get(scope, &["webapp.video-detail"])
         .ok_or_else(|| Error::parse("水合数据里没有 webapp.video-detail"))?;
 
-    let status = util::num_at(detail, &["statusCode"]) as i64;
+    let status = util::i64_at(detail, &["statusCode"]);
     if status != 0 {
         return Err(status_error(status));
     }
@@ -113,22 +113,23 @@ fn build(item: &Value) -> VideoInfo {
             }
             let w = util::u32_at(b, &["PlayAddr", "Width"]);
             let h = util::u32_at(b, &["PlayAddr", "Height"]);
-            let short = if w > 0 && h > 0 { w.min(h) } else { h };
+            let short = short_side(w, h);
+            let codec = if util::str_at(b, &["CodecType"]).contains("h265") {
+                "H.265"
+            } else {
+                ""
+            };
+            // GearName 是 TikTok 的内部档位名（normal_720 / lowest_1080_1），
+            // 不适合直接给用户看，只在算不出短边时兜底
+            let gear = util::str_at(b, &["GearName"]);
+            let quality = if short > 0 { "" } else { gear.as_str() };
             formats.push(Format {
-                label: if short > 0 {
-                    format!("{short}p")
-                } else {
-                    util::str_at(b, &["GearName"])
-                },
+                label: Format::label_for(quality, short, codec),
                 url: u.to_owned(),
                 ext: "mp4".into(),
                 height: short,
                 filesize: util::u64_at(b, &["PlayAddr", "DataSize"]),
-                codec: if util::str_at(b, &["CodecType"]).contains("h265") {
-                    "H.265".into()
-                } else {
-                    String::new()
-                },
+                codec: codec.to_owned(),
                 ..Default::default()
             });
         }
@@ -183,6 +184,8 @@ fn block_error(html: &str) -> Error {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -217,6 +220,25 @@ mod tests {
         assert_eq!(info.author.name, "作者");
         assert_eq!(info.formats.len(), 2);
         assert!(info.formats.iter().any(|f| f.codec == "H.265"));
+    }
+
+    #[test]
+    fn internal_gear_names_do_not_leak_into_labels() {
+        // GearName 是 TikTok 内部叫法，展示出来用户看不懂；能算出短边就该用 "720p"
+        let item = json!({
+            "video": {
+                "playAddr": "https://v/default.mp4",
+                "bitrateInfo": [
+                    {"PlayAddr": {"UrlList": ["https://v/720.mp4"], "Width": 720, "Height": 1280},
+                     "GearName": "normal_720", "CodecType": "h264"},
+                    // 拿不到宽高时才退回 GearName，总比空标签强
+                    {"PlayAddr": {"UrlList": ["https://v/unknown.mp4"]}, "GearName": "lowest_1080_1"}
+                ]
+            },
+            "author": {"uniqueId": "u"}
+        });
+        let labels: Vec<_> = build(&item).formats.into_iter().map(|f| f.label).collect();
+        assert_eq!(labels, vec!["720p", "lowest_1080_1"]);
     }
 
     #[test]

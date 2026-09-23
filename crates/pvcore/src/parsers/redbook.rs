@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Reason, Result};
 use crate::http::{Http, Req};
-use crate::model::{Author, Format, Image, VideoInfo};
+use crate::model::{short_side, Author, Format, Image, VideoInfo};
 use crate::util;
 
 /// 原图：按 key 从 ci 取，`w/0` 表示不缩放。页面里给的都是缩到 1080 宽的版本。
@@ -80,10 +80,7 @@ async fn fetch(http: &Http, url: &str, mode: Mode) -> Result<VideoInfo> {
     let final_url = resp.url.clone();
     let html = resp.text();
 
-    if url::Url::parse(&final_url)
-        .map(|u| u.path().contains("/login"))
-        .unwrap_or(false)
-    {
+    if url::Url::parse(&final_url).is_ok_and(|u| u.path().contains("/login")) {
         return Err(Error::login("小红书要求这个出口登录"));
     }
 
@@ -103,7 +100,7 @@ async fn fetch(http: &Http, url: &str, mode: Mode) -> Result<VideoInfo> {
             }
             let data = util::get(note, &["noteDetailMap", &note_id, "note"])
                 .ok_or_else(|| Error::deleted("笔记详情为空（链接可能过期或缺 xsec_token）"))?;
-            build(data, "urlDefault", "nickname")
+            Ok(build(data, "urlDefault", "nickname"))
         }
         Mode::Mobile => {
             let data = util::get(&state, &["noteData", "data", "noteData"]).ok_or_else(|| {
@@ -113,76 +110,23 @@ async fn fetch(http: &Http, url: &str, mode: Mode) -> Result<VideoInfo> {
                     block_error(&final_url, &html)
                 }
             })?;
-            build(data, "url", "nickName")
+            Ok(build(data, "url", "nickName"))
         }
     }
 }
 
-fn build(data: &Value, image_url_key: &str, nick_key: &str) -> Result<VideoInfo> {
-    let stream = util::get(data, &["video", "media", "stream"])
-        .cloned()
-        .unwrap_or_default();
-
-    // 视频：h264 里挑分辨率最高的当默认（浏览器能直接播），其余档位和 h265 进 formats
-    let mut h264: Vec<&Value> = util::arr_at(&stream, &["h264"])
-        .iter()
-        .filter(|s| !util::str_at(s, &["masterUrl"]).is_empty())
-        .collect();
-    h264.sort_by_key(|s| {
-        let px = util::u64_at(s, &["width"]) * util::u64_at(s, &["height"]);
-        let br = util::u64_at(s, &["videoBitrate"]).max(util::u64_at(s, &["avgBitrate"]));
-        std::cmp::Reverse((px, br))
-    });
-
-    let mut video_url = String::new();
-    let mut width = 0;
-    let mut height = 0;
-    let mut duration = 0.0;
-    let mut formats: Vec<Format> = Vec::new();
-
-    if let Some(best) = h264.first() {
-        video_url = util::str_at(best, &["masterUrl"]);
-        width = util::u32_at(best, &["width"]);
-        height = util::u32_at(best, &["height"]);
-        duration = util::num_at(best, &["duration"]) / 1000.0;
-
-        let mut seen = vec![(width, height)];
-        for s in h264.iter().skip(1) {
-            let key = (util::u32_at(s, &["width"]), util::u32_at(s, &["height"]));
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.push(key);
-            let short = key.0.min(key.1);
-            formats.push(Format {
-                label: format!("{short}p"),
-                url: util::str_at(s, &["masterUrl"]),
-                ext: "mp4".into(),
-                height: short,
-                filesize: util::u64_at(s, &["size"]),
-                ..Default::default()
-            });
-        }
-        // h265 体积小很多，给一档就够
-        if let Some(s) = util::arr_at(&stream, &["h265"])
-            .iter()
-            .find(|s| !util::str_at(s, &["masterUrl"]).is_empty())
-        {
-            let short = util::u32_at(s, &["width"]).min(util::u32_at(s, &["height"]));
-            formats.push(Format {
-                label: format!("{short}p H.265"),
-                url: util::str_at(s, &["masterUrl"]),
-                ext: "mp4".into(),
-                height: short,
-                filesize: util::u64_at(s, &["size"]),
-                codec: "H.265".into(),
-                ..Default::default()
-            });
-        }
+fn build(data: &Value, image_url_key: &str, nick_key: &str) -> VideoInfo {
+    let mut video = video_part(data);
+    if video.duration <= 0.0 {
+        video.duration = util::num_at(data, &["video", "capa", "duration"]);
     }
-    if duration == 0.0 {
-        duration = util::num_at(data, &["video", "capa", "duration"]);
-    }
+    let Video {
+        video_url,
+        width,
+        height,
+        duration,
+        formats,
+    } = video;
 
     // 图集：换成原图分辨率；实况图带上那段短视频
     let image_list = util::arr_at(data, &["imageList"]);
@@ -238,7 +182,7 @@ fn build(data: &Value, image_url_key: &str, nick_key: &str) -> Result<VideoInfo>
         }
     };
 
-    Ok(VideoInfo {
+    VideoInfo {
         video_url,
         cover_url: cover,
         title,
@@ -253,7 +197,83 @@ fn build(data: &Value, image_url_key: &str, nick_key: &str) -> Result<VideoInfo>
             util::str_at(&user, &["avatar"]),
         ),
         ..Default::default()
-    })
+    }
+}
+
+/// `build` 拆出来的视频部分。
+#[derive(Default)]
+struct Video {
+    video_url: String,
+    width: u32,
+    height: u32,
+    duration: f64,
+    formats: Vec<Format>,
+}
+
+/// 挑默认播放档 + 列出其余清晰度。
+///
+/// h264 里分辨率（再按码率）最高的那条当默认——浏览器能直接播；其余档位和
+/// 一条 h265 进 formats。h265 体积小很多但兼容性差，所以只给一档、不当默认。
+fn video_part(data: &Value) -> Video {
+    let stream = util::get(data, &["video", "media", "stream"])
+        .cloned()
+        .unwrap_or_default();
+
+    let mut h264: Vec<&Value> = util::arr_at(&stream, &["h264"])
+        .iter()
+        .filter(|s| !util::str_at(s, &["masterUrl"]).is_empty())
+        .collect();
+    h264.sort_by_key(|s| {
+        let px = util::u64_at(s, &["width"]) * util::u64_at(s, &["height"]);
+        let br = util::u64_at(s, &["videoBitrate"]).max(util::u64_at(s, &["avgBitrate"]));
+        std::cmp::Reverse((px, br))
+    });
+
+    let Some(best) = h264.first() else {
+        return Video::default();
+    };
+
+    let width = util::u32_at(best, &["width"]);
+    let height = util::u32_at(best, &["height"]);
+    let mut formats = Vec::new();
+
+    // 同分辨率的多条只留一条：小红书经常给好几个码率版本
+    let mut seen = vec![(width, height)];
+    for s in h264.iter().skip(1) {
+        let key = (util::u32_at(s, &["width"]), util::u32_at(s, &["height"]));
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        formats.push(stream_format(s, ""));
+    }
+    if let Some(s) = util::arr_at(&stream, &["h265"])
+        .iter()
+        .find(|s| !util::str_at(s, &["masterUrl"]).is_empty())
+    {
+        formats.push(stream_format(s, "H.265"));
+    }
+
+    Video {
+        video_url: util::str_at(best, &["masterUrl"]),
+        width,
+        height,
+        duration: util::num_at(best, &["duration"]) / 1000.0,
+        formats,
+    }
+}
+
+fn stream_format(s: &Value, codec: &str) -> Format {
+    let short = short_side(util::u32_at(s, &["width"]), util::u32_at(s, &["height"]));
+    Format {
+        label: Format::label_for("", short, codec),
+        url: util::str_at(s, &["masterUrl"]),
+        ext: "mp4".into(),
+        height: short,
+        filesize: util::u64_at(s, &["size"]),
+        codec: codec.to_owned(),
+        ..Default::default()
+    }
 }
 
 /// 从页面图片地址里取出存储 key，可能带 `notes_pre_post/` 或 `spectrum/` 前缀。
@@ -303,6 +323,8 @@ fn block_error(final_url: &str, html: &str) -> Error {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -335,7 +357,7 @@ mod tests {
             }}},
             "user": {"userId": "u1", "nickname": "作者"}
         });
-        let info = build(&data, "urlDefault", "nickname").unwrap();
+        let info = build(&data, "urlDefault", "nickname");
         assert_eq!(info.video_url, "https://v/1080.mp4");
         assert_eq!(info.height, 1920);
         assert_eq!(info.duration, 15.0);
@@ -355,7 +377,7 @@ mod tests {
             ],
             "user": {"nickname": "作者"}
         });
-        let info = build(&data, "urlDefault", "nickname").unwrap();
+        let info = build(&data, "urlDefault", "nickname");
         assert_eq!(info.images.len(), 2);
         assert!(info.images[0]
             .url
@@ -374,7 +396,7 @@ mod tests {
             "imageList": [{"urlDefault": "http://a/b/c/tok!x",
                            "stream": {"h264": [{"masterUrl": "https://v/live.mp4"}]}}]
         });
-        let info = build(&data, "urlDefault", "nickname").unwrap();
+        let info = build(&data, "urlDefault", "nickname");
         assert!(
             info.images[0].live_photo_url.is_empty(),
             "没标 livePhoto 就不该带实况地址"

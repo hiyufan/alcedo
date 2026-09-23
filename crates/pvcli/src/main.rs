@@ -85,7 +85,7 @@ async fn run() -> ExitCode {
 }
 
 fn print_human(info: &VideoInfo) {
-    let src = info.source.map(Source::display_name).unwrap_or("未知");
+    let src = info.source.map_or("未知", Source::display_name);
     println!("平台  : {src}");
     if !info.title.is_empty() {
         println!("标题  : {}", info.title);
@@ -122,6 +122,8 @@ fn print_human(info: &VideoInfo) {
     if !info.formats.is_empty() {
         println!("清晰度:");
         for f in &info.formats {
+            // 只是显示成 MB，精度损失无所谓
+            #[allow(clippy::cast_precision_loss)]
             let size = if f.filesize > 0 {
                 format!("  {:.1} MB", f.filesize as f64 / 1e6)
             } else {

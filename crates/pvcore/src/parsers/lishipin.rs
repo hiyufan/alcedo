@@ -23,8 +23,7 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     // mrd 是个随机数，梨视频拿它防缓存；用时间戳即可
     let mrd = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     let detail_page = format!("https://www.pearvideo.com/detail_{id}");
     let api = format!("https://www.pearvideo.com/videoStatus.jsp?contId={id}&mrd={mrd}");
@@ -67,7 +66,7 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     // 把那段 systemTime 换成 cont-<id> 才是能直接播的地址
     let timer = util::str_at(&json, &["systemTime"]);
     let video_url = if timer.is_empty() {
-        src.clone()
+        src
     } else {
         src.replace(&timer, &format!("cont-{id}"))
     };
@@ -100,6 +99,8 @@ fn title_from_page(html: &str) -> String {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

@@ -33,7 +33,7 @@ pub use http::Config;
 pub use model::{Author, Format, Image, Source, VideoInfo};
 
 /// 解析入口。构造一次，全程复用——它持有连接池。
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Client {
     cfg: Arc<Config>,
 }
@@ -119,6 +119,8 @@ impl Client {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

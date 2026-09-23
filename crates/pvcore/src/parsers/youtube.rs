@@ -178,18 +178,12 @@ fn build(resp: &Value, video_id: &str) -> Result<VideoInfo> {
         .copied();
 
     let mut info = VideoInfo {
-        video_url: best_progressive
-            .map(|f| util::str_at(f, &["url"]))
-            .unwrap_or_else(|| hls.clone()),
+        video_url: best_progressive.map_or_else(|| hls.clone(), |f| util::str_at(f, &["url"])),
         cover_url: best_thumbnail(&details, video_id),
         title: util::str_at(&details, &["title"]),
         duration: util::num_at(&details, &["lengthSeconds"]),
-        width: best_progressive
-            .map(|f| util::u32_at(f, &["width"]))
-            .unwrap_or(0),
-        height: best_progressive
-            .map(|f| util::u32_at(f, &["height"]))
-            .unwrap_or(0),
+        width: best_progressive.map_or(0, |f| util::u32_at(f, &["width"])),
+        height: best_progressive.map_or(0, |f| util::u32_at(f, &["height"])),
         author: Author::new(
             util::str_at(&details, &["channelId"]),
             util::str_at(&details, &["author"]),
@@ -418,6 +412,8 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 #[cfg(test)]
+// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

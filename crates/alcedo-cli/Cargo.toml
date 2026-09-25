@@ -17,8 +17,12 @@ doc = false
 
 [dependencies]
 alcedo = { path = "../alcedo" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
+# serve 模式。hyper / tower 已经被 reqwest 带进来了，axum 只多几个小 crate；
+# 关掉默认 feature，不要 HTTP/2 服务端、表单、multipart 这些用不上的东西。
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "json"] }
 
 [lints]
 workspace = true

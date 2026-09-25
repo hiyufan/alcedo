@@ -110,6 +110,33 @@ You can paste a whole share blurb from an app — the link is pulled out for you
 alcedo "7.99 复制打开抖音，看看【作者】的作品 https://v.douyin.com/iRNBho6u/ 很好看"
 ```
 
+### Long-running server
+
+For programs in other languages (Python, Node, ...). Spawning an `alcedo` process per
+request redoes every TLS handshake; the server keeps the connection pool, guest
+identities and result cache warm:
+
+```bash
+alcedo serve                                  # listens on 127.0.0.1:7878 by default
+alcedo serve --listen 0.0.0.0:7878 --prewarm douyin,bilibili
+```
+
+```bash
+curl "127.0.0.1:7878/parse?url=https%3A%2F%2Fv.douyin.com%2Fxxxxxx%2F"
+curl "127.0.0.1:7878/parse?source=bilibili&id=BV1GJ411x7h7"
+curl "127.0.0.1:7878/health"
+```
+
+Success returns 200 with the JSON described in [Output format](#output-format); failures
+return a matching status code and `{"reason": "...", "message": "...", "detail": "..."}`,
+where `reason` is one of the values in [Error handling](#error-handling).
+
+- `--prewarm` / `ALCEDO_PREWARM`: warm these platforms' connections at startup and touch
+  them again every 4 minutes so an idle pool is never reclaimed. Defaults to
+  `douyin,bilibili,redbook`; `none` disables it.
+- `ALCEDO_SERVE_TOKEN`: when set, requests must carry `Authorization: Bearer <token>`.
+  Always set it when listening on a public address.
+
 ### As a library
 
 ```toml

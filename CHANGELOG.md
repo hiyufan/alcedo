@@ -11,6 +11,8 @@
 - 字节系匿名 `ttwid` 游客身份，自动获取与失效重领
 - 外部签名器框架（`ALCEDO_SIGNER_<平台>`），把会季度轮换的算法挡在仓库外
 - CLI `alcedo`：摘要 / `--json` / `--list`
+- `alcedo serve` 常驻 HTTP 服务（`/parse`、`/health`），给其他语言的程序调用；
+  启动预热并每 4 分钟保温，可选 `ALCEDO_SERVE_TOKEN` 鉴权
 - npm 分发：`npm install -g alcedo-cli` 安装预编译二进制（Linux musl / macOS / Windows，
   x64 与 arm64）；推 `v*` tag 自动发布 npm 和 GitHub Release
 - CI：每次 push 跑 fmt + clippy + 测试 + 三平台构建 + 依赖审计；

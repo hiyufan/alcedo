@@ -105,6 +105,30 @@ alcedo --list                              # 支持的平台
 alcedo "7.99 复制打开抖音，看看【作者】的作品 https://v.douyin.com/iRNBho6u/ 很好看"
 ```
 
+### 常驻服务
+
+给 Python / Node 等其他语言的程序用。每次起一个 `alcedo` 进程都要重新握手，
+常驻服务能复用连接池、游客身份和结果缓存：
+
+```bash
+alcedo serve                                  # 默认听 127.0.0.1:7878
+alcedo serve --listen 0.0.0.0:7878 --prewarm douyin,bilibili
+```
+
+```bash
+curl "127.0.0.1:7878/parse?url=https%3A%2F%2Fv.douyin.com%2Fxxxxxx%2F"
+curl "127.0.0.1:7878/parse?source=bilibili&id=BV1GJ411x7h7"
+curl "127.0.0.1:7878/health"
+```
+
+成功返回 200 和[输出格式](#输出格式)里的 JSON；失败返回对应状态码和
+`{"reason": "...", "message": "...", "detail": "..."}`，`reason` 的取值见[错误处理](#错误处理)。
+
+- `--prewarm` / `ALCEDO_PREWARM`：启动时预热这些平台的连接，之后每 4 分钟再碰一次，
+  免得低流量时连接池空闲回收。默认 `douyin,bilibili,redbook`，`none` 关闭。
+- `ALCEDO_SERVE_TOKEN`：设了就要求请求头带 `Authorization: Bearer <令牌>`。
+  监听公网地址时务必设置。
+
 ### 作为库使用
 
 ```toml

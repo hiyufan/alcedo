@@ -4,6 +4,7 @@
 //! alcedo <链接或分享文案>          # 人类可读摘要
 //! alcedo --json <链接>             # 机器可读 JSON
 //! alcedo --list                    # 支持的平台
+//! alcedo serve                     # 常驻 HTTP 服务（见 serve 模块）
 //! ```
 //!
 //! 没有引 clap：参数就这几个，手写解析省掉一个中等体量的依赖和它的编译时间。
@@ -11,6 +12,8 @@
 use std::process::ExitCode;
 
 use alcedo::{Client, Source, VideoInfo};
+
+mod serve;
 
 fn main() -> ExitCode {
     let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -28,6 +31,23 @@ fn main() -> ExitCode {
 
 async fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("serve") {
+        if args.iter().any(|a| a == "-h" || a == "--help") {
+            print_help();
+            return ExitCode::SUCCESS;
+        }
+        let result = match serve::Options::from_args(&args[1..]) {
+            Ok(opts) => serve::run(opts).await,
+            Err(e) => Err(e),
+        };
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         print_help();
         return ExitCode::SUCCESS;
@@ -164,6 +184,9 @@ fn print_help() {
   alcedo --json <链接>        输出 JSON
   alcedo --list               列出支持的平台
   alcedo --version            版本号
+  alcedo serve [--listen 地址] [--prewarm 平台,...]
+                              常驻 HTTP 服务, 默认听 127.0.0.1:7878
+                              GET /parse?url=<链接>  GET /health
 
 环境变量:
   ALCEDO_PROXY                所有平台的代理, 如 http://127.0.0.1:7890
@@ -174,7 +197,12 @@ fn print_help() {
   ALCEDO_XHS_COOKIE           小红书登录 cookie
   ALCEDO_REQUEST_TIMEOUT      单个请求超时秒数 (默认 20)
   ALCEDO_TOTAL_TIMEOUT        整体解析超时秒数 (默认 45)
-  ALCEDO_SSRF_DNS=0           关闭 DNS 层的内网地址拦截 (自建镜像时才需要)",
+  ALCEDO_SSRF_DNS=0           关闭 DNS 层的内网地址拦截 (自建镜像时才需要)
+
+serve 模式:
+  ALCEDO_LISTEN               监听地址, 同 --listen
+  ALCEDO_PREWARM              预热并保温的平台, 同 --prewarm (默认 douyin,bilibili,redbook; none 关闭)
+  ALCEDO_SERVE_TOKEN          设了就要求请求带 Authorization: Bearer <令牌>",
         ver = env!("CARGO_PKG_VERSION")
     );
 }

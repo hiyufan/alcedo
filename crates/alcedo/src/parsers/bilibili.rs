@@ -4,12 +4,12 @@
 //! 自己列出档位交给上层合并，一次请求就能拿到 1080p 以上。只取 `durl` 的话
 //! 封顶 720p，想要更高就得另起外部进程，既慢又多一层依赖。
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use parking_lot::RwLock;
 use serde_json::Value;
 
 use crate::error::{Error, Reason, Result};
+use crate::http::identity::IdentitySlot;
 use crate::http::{ua, Http, Req};
 use crate::model::{short_side, Author, Format, VideoInfo};
 use crate::util;
@@ -19,8 +19,7 @@ const REFERER: &str = "https://www.bilibili.com/";
 /// 设备指纹 cookie。机房 / 海外 IP 不带 buvid3 直接请求 API 会被 412。
 ///
 /// 进程内缓存一份，免得每次解析都去领一次（多一个跨洋往返）。
-static BUVID: RwLock<Option<(String, Instant)>> = RwLock::new(None);
-const BUVID_TTL: Duration = Duration::from_secs(3600);
+static BUVID: IdentitySlot = IdentitySlot::new(Duration::from_secs(3600));
 
 /// 解析一条哔哩哔哩分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
@@ -32,14 +31,17 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
 pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     let http = http.clone().with_fixed_ua(ua::DESKTOP_FIXED);
     let cookie = ensure_buvid(&http).await;
+    let cookie = cookie.as_deref();
 
-    // 第一步：作品信息（标题、封面、作者、分 P）
-    let view = api_get(
-        &http,
-        &format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}"),
-        cookie.as_deref(),
-    )
-    .await?;
+    // 播放地址只依赖 cid，作品信息（标题、封面、作者）只用来填展示字段，两条线
+    // 互不等待。cid 从 pagelist 拿：它只有两百来字节，比 view 快 ~27ms，这样
+    // 关键路径是 pagelist → playurl，view 在旁边并行跑完。
+    let view_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
+    let (view, early) = tokio::join!(api_get(&http, &view_url, cookie), async {
+        let cid = page_cid(&http, bvid, cookie).await?;
+        Some(play_urls(&http, bvid, cid, cookie).await)
+    });
+    let view = view?;
 
     let code = util::i64_at(&view, &["code"]);
     if code != 0 {
@@ -52,21 +54,18 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     }
 
     let data = util::get(&view, &["data"]).ok_or_else(|| Error::parse("view 接口没有 data"))?;
-    let cid = util::u64_at(data, &["pages", "0", "cid"]);
-    if cid == 0 {
-        return Err(Error::parse("view 接口没有返回 cid"));
-    }
-
-    // 第二步：播放地址。fnval=4048 要 DASH，fourk=1 放开 4K。
-    let play = api_get(
-        &http,
-        &format!(
-            "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}\
-             &qn=127&fnval=4048&fnver=0&fourk=1&otype=json"
-        ),
-        cookie.as_deref(),
-    )
-    .await?;
+    let (play, legacy) = match early {
+        Some(urls) => urls,
+        // pagelist 没拿到（老 av 号之类），退回用 view 里的 cid 再要一次
+        None => {
+            let cid = util::u64_at(data, &["pages", "0", "cid"]);
+            if cid == 0 {
+                return Err(Error::parse("view 接口没有返回 cid"));
+            }
+            play_urls(&http, bvid, cid, cookie).await
+        }
+    };
+    let play = play?;
 
     let play_code = util::i64_at(&play, &["code"]);
     if play_code != 0 {
@@ -101,7 +100,7 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
         // 这一步不能因为"已经有 formats 了"就跳过：没有它前端就没有可直接播放
         // 的地址。顺带一提，html5 平台这条路不登录也能给到 720p，比 DASH 那边
         // 未登录只给 360/480 更高——所以它同时也是清晰度的补充。
-        match legacy_durl(&http, bvid, cid, cookie.as_deref()).await {
+        match legacy {
             Ok(u) if !u.is_empty() => info.video_url = u,
             Ok(_) => {}
             Err(e) => tracing::debug!(error = %e, "B 站合一流拿不到，只剩 DASH 档位"),
@@ -145,16 +144,16 @@ async fn bvid_from_url(http: &Http, url: &str) -> Result<String> {
 }
 
 /// 领一份 buvid cookie。拿不到就裸请求试试，别因为指纹接口抽风就整条路断掉。
-async fn ensure_buvid(http: &Http) -> Option<String> {
+pub(crate) async fn ensure_buvid(http: &Http) -> Option<String> {
     if let Some(c) = http.config().bilibili_cookie.clone() {
         return Some(c);
     }
-    if let Some((c, at)) = BUVID.read().as_ref() {
-        if at.elapsed() < BUVID_TTL {
-            return Some(c.clone());
-        }
-    }
+    BUVID
+        .get_or_fetch(http, |http| async move { fetch_buvid(&http).await })
+        .await
+}
 
+async fn fetch_buvid(http: &Http) -> Option<String> {
     let resp = http
         .send(
             Req::get("https://api.bilibili.com/x/frontend/finger/spi")
@@ -169,9 +168,7 @@ async fn ensure_buvid(http: &Http) -> Option<String> {
         return None;
     }
     let b4 = util::str_at(&json, &["data", "b_4"]);
-    let cookie = format!("buvid3={b3}; buvid4={b4}");
-    *BUVID.write() = Some((cookie.clone(), Instant::now()));
-    Some(cookie)
+    Some(format!("buvid3={b3}; buvid4={b4}"))
 }
 
 /// 发一个带完整伪装头的 API 请求；撞上 412 就换一份 buvid 重来一次。
@@ -189,7 +186,7 @@ async fn api_get(http: &Http, url: &str, cookie: Option<&str>) -> Result<Value> 
         if resp.status.as_u16() == 412 {
             if attempt == 0 && http.config().bilibili_cookie.is_none() {
                 // 风控：手上这份 buvid 被标记了，丢掉重领
-                *BUVID.write() = None;
+                BUVID.forget();
                 let _ = ensure_buvid(http).await;
                 continue;
             }
@@ -201,6 +198,33 @@ async fn api_get(http: &Http, url: &str, cookie: Option<&str>) -> Result<Value> 
         return resp.json();
     }
     Err(Error::blocked("B 站连续返回 412"))
+}
+
+/// 第一 P 的 cid。拿不到返回 `None`，由调用方退回 view 里的那份。
+async fn page_cid(http: &Http, bvid: &str, cookie: Option<&str>) -> Option<u64> {
+    let url = format!("https://api.bilibili.com/x/player/pagelist?bvid={bvid}");
+    let json = api_get(http, &url, cookie).await.ok()?;
+    Some(util::u64_at(&json, &["data", "0", "cid"])).filter(|&c| c != 0)
+}
+
+/// 两份播放地址：DASH 分轨（fnval=4048 要 DASH，fourk=1 放开 4K）和合一流。
+///
+/// 两者只依赖 cid，互不等待。DASH 实际上从不带 durl，合一流几乎每次都要补，
+/// 串行就是白等一个往返（实测 ~80ms），所以一起发。
+async fn play_urls(
+    http: &Http,
+    bvid: &str,
+    cid: u64,
+    cookie: Option<&str>,
+) -> (Result<Value>, Result<String>) {
+    let dash_url = format!(
+        "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}\
+         &qn=127&fnval=4048&fnver=0&fourk=1&otype=json"
+    );
+    tokio::join!(
+        api_get(http, &dash_url, cookie),
+        legacy_durl(http, bvid, cid, cookie),
+    )
 }
 
 /// 老接口的合一流，作为 DASH 不可用时的退路。

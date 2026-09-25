@@ -18,8 +18,15 @@ use crate::util;
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let host = util::host_of(url).unwrap_or_default();
 
-    let video_id = if host == "v.douyin.com" {
-        let location = http.resolve_redirect(url).await?;
+    let target = if host == "v.douyin.com" {
+        // 短链跳转和领游客身份互不依赖，一起发。身份缓存命中时第二个立即返回；
+        // 冷启动或身份过期时省掉一个串行往返（实测 ~150ms）。
+        let (location, _) = tokio::join!(http.resolve_redirect(url), async {
+            if http.config().douyin_cookie.is_none() {
+                identity::bytedance_ttwid(http).await;
+            }
+        });
+        let location = location?;
         // 抖音的分享链接有时会跳到西瓜视频, 那边拿不到 aweme_id。
         // 早先这里返回空字符串, 上层统一报 "Failed to parse video ID", 被归类成
         // deleted, 对用户谎称"内容已被删除"——站点本来就支持西瓜, 直说就行。
@@ -28,20 +35,24 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
                 "这条分享链接跳转到了西瓜视频，直接粘贴西瓜视频的链接就能解析",
             ));
         }
-        video_id_from_url(&location)
+        location
     } else {
-        video_id_from_url(url)
+        url.to_owned()
     };
 
-    let video_id = video_id
+    let video_id = video_id_from_url(&target)
         .ok_or_else(|| Error::deleted("链接里没有作品 ID（可能跳到了个人主页或活动页）"))?;
 
-    parse_id(http, &video_id).await
+    parse_with_hint(http, &video_id, looks_like_note(&target)).await
 }
 
 /// 已知抖音作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
-    let data = match slides_info(http, video_id).await? {
+    parse_with_hint(http, video_id, false).await
+}
+
+async fn parse_with_hint(http: &Http, video_id: &str, note: bool) -> Result<VideoInfo> {
+    let data = match slides_info(http, video_id, note).await? {
         Some(d) => d,
         None => ssr_fallback(http, video_id).await?,
     };
@@ -71,17 +82,34 @@ fn video_id_from_url(url: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// 地址是不是图文作品（`/note/{id}`、`/share/note/{id}/`、`/share/slides/{id}/`）。
+fn looks_like_note(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.path_segments()
+            .is_some_and(|mut s| s.any(|p| p == "note" || p == "slides"))
+    })
+}
+
+/// slidesinfo 的两个入口主机，按优先级排。
+///
+/// 同一个接口两个域名都挂着，走的是不同的 CDN 边缘。热连接下实测（各 15 次）：
+/// `www.douyin.com` p50 ~200ms / p90 ~220ms，`www.iesdouyin.com` p50 226~266ms /
+/// p90 273~349ms——前者不仅快，尾部也稳得多。后者留作退路：某个域名被风控或
+/// 出口不通时，换一个往往就过了。
+const SLIDES_HOSTS: [&str; 2] = ["www.douyin.com", "www.iesdouyin.com"];
+
 /// 作品详情接口。拿不到数据返回 `None`（留给 SSR 兜底），被平台明确挡掉则报错。
-async fn slides_info(http: &Http, video_id: &str) -> Result<Option<Value>> {
-    // 普通视频不带 request_source 就能拿到；图文（note）需要 request_source=200。
-    let urls = [
-        format!(
-            "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/?aweme_ids=%5B{video_id}%5D"
-        ),
-        format!(
-            "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/?aweme_ids=%5B{video_id}%5D&request_source=200"
-        ),
-    ];
+///
+/// `note` 是从地址上看出来的"这是图文"：普通视频不带 request_source 就能拿到，
+/// 图文要 request_source=200。已知是图文就先发后者，省掉先撞一次 filter 的往返。
+async fn slides_info(http: &Http, video_id: &str, note: bool) -> Result<Option<Value>> {
+    let plain = format!("aweme_ids=%5B{video_id}%5D");
+    let with_source = format!("{plain}&request_source=200");
+    let queries = if note {
+        [with_source, plain]
+    } else {
+        [plain, with_source]
+    };
 
     // 抖音对某些作品返回 status_code=0 + aweme_details=null + filter_list，意思是
     // "接口正常，但这条不对外给数据"。只有两个入口都没拿到才算数：正常视频带
@@ -95,39 +123,19 @@ async fn slides_info(http: &Http, video_id: &str) -> Result<Option<Value>> {
     } else {
         None
     };
-    // a_bogus 这类会轮换的签名交给外部签名器；没配就走免签名路径，不报错
-    let signer = Signer::for_source(Source::DouYin);
 
-    for api in urls {
-        let query = api.split_once('?').map_or("", |(_, q)| q);
-        let sig = signer.sign(http, Source::DouYin, &api, query, "").await;
-        let signed = sig.apply_url(&api);
-
-        let mut req = sig.apply(Req::get(&signed).referer("https://www.douyin.com/"));
-        if let Some(c) = http.config().douyin_cookie.as_deref() {
-            req = req.cookie_header(c);
-        } else if let Some(t) = ttwid.as_deref() {
-            req = req.cookie("ttwid", t);
-        }
-
-        let Ok(resp) = http.send(req).await else {
-            continue;
-        };
-        if matches!(resp.status.as_u16(), 401 | 403 | 412) {
-            // 这份身份被标记了，扔掉，下次重新领一个
-            identity::forget_bytedance();
-            continue;
-        }
-        if !resp.status.is_success() {
-            continue;
-        }
-        let Ok(json) = resp.json() else { continue };
-
-        if !util::arr_at(&json, &["aweme_details"]).is_empty() {
-            return Ok(Some(json["aweme_details"][0].clone()));
-        }
-        if let Some(first) = util::arr_at(&json, &["filter_list"]).first() {
-            filtered = Some(first.clone());
+    for query in &queries {
+        for host in SLIDES_HOSTS {
+            let api = format!("https://{host}/web/api/v2/aweme/slidesinfo/?{query}");
+            match fetch_slides(http, &api, query, ttwid.as_deref()).await {
+                Slides::Found(data) => return Ok(Some(data)),
+                // 平台明确说了"这条不给"，换主机也一样，直接试下一个 query
+                Slides::Filtered(f) => {
+                    filtered = Some(f);
+                    break;
+                }
+                Slides::Failed => {}
+            }
         }
     }
 
@@ -143,6 +151,50 @@ async fn slides_info(http: &Http, video_id: &str) -> Result<Option<Value>> {
     }
 
     Ok(None)
+}
+
+enum Slides {
+    Found(Value),
+    Filtered(Value),
+    /// 网络、状态码、非 JSON、空结果：这个主机没拿到，换一个试
+    Failed,
+}
+
+async fn fetch_slides(http: &Http, api: &str, query: &str, ttwid: Option<&str>) -> Slides {
+    // a_bogus 这类会轮换的签名交给外部签名器；没配就走免签名路径，不报错
+    let signer = Signer::for_source(Source::DouYin);
+    let sig = signer.sign(http, Source::DouYin, api, query, "").await;
+    let signed = sig.apply_url(api);
+
+    let mut req = sig.apply(Req::get(&signed).referer("https://www.douyin.com/"));
+    if let Some(c) = http.config().douyin_cookie.as_deref() {
+        req = req.cookie_header(c);
+    } else if let Some(t) = ttwid {
+        req = req.cookie("ttwid", t);
+    }
+
+    let Ok(resp) = http.send(req).await else {
+        return Slides::Failed;
+    };
+    if matches!(resp.status.as_u16(), 401 | 403 | 412) {
+        // 这份身份被标记了，扔掉，下次重新领一个
+        identity::forget_bytedance();
+        return Slides::Failed;
+    }
+    if !resp.status.is_success() {
+        return Slides::Failed;
+    }
+    let Ok(json) = resp.json() else {
+        return Slides::Failed;
+    };
+
+    if let Some(first) = util::arr_at(&json, &["aweme_details"]).first() {
+        return Slides::Found(first.clone());
+    }
+    match util::arr_at(&json, &["filter_list"]).first() {
+        Some(f) => Slides::Filtered(f.clone()),
+        None => Slides::Failed,
+    }
 }
 
 /// 页面 SSR 兜底。
@@ -366,6 +418,25 @@ fn make_format(short: u32, codec: &str, url: &str, size: u64) -> Format {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn note_urls_are_recognized() {
+        assert!(looks_like_note(
+            "https://www.douyin.com/note/7424432820954598707"
+        ));
+        assert!(looks_like_note(
+            "https://www.iesdouyin.com/share/note/7424432820954598707/?from=web"
+        ));
+        assert!(looks_like_note(
+            "https://www.iesdouyin.com/share/slides/7424432820954598707/"
+        ));
+        assert!(!looks_like_note(
+            "https://www.iesdouyin.com/share/video/7424432820954598707/"
+        ));
+        assert!(!looks_like_note(
+            "https://www.douyin.com/video/7424432820954598707"
+        ));
+    }
 
     #[test]
     fn extracts_id_from_every_url_shape() {

@@ -113,6 +113,9 @@ impl Client {
                 {
                     let _ = http::identity::bytedance_ttwid(&http).await;
                 }
+                if source == Source::BiliBili {
+                    let _ = parsers::bilibili::ensure_buvid(&http).await;
+                }
                 tracing::debug!(source = source.as_str(), ok = warm, "预热完成");
             })
         });

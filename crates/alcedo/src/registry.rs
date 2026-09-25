@@ -107,12 +107,13 @@ pub fn supported() -> Vec<Source> {
 /// 解析这个平台时**第一个**会连上的主机。
 ///
 /// 预热连接时用。注意不是平台的门户域名，而是解析器真正请求的那个接口主机——
-/// 预热 `www.douyin.com` 对随后请求 `www.iesdouyin.com` 的连接毫无帮助。
+/// 预热 `www.douyin.com` 对随后请求 `www.iesdouyin.com` 的连接毫无帮助，反过来也一样。
 ///
 /// 返回 `None` 表示第一跳取决于具体链接（短链跳转、页面抓取），预热没有固定目标。
 pub const fn warmup_host(source: Source) -> Option<&'static str> {
     Some(match source {
-        Source::DouYin | Source::XiGua => "www.iesdouyin.com",
+        Source::DouYin => "www.douyin.com",
+        Source::XiGua => "m.ixigua.com",
         Source::BiliBili => "api.bilibili.com",
         Source::YouTube => "www.youtube.com",
         Source::TikTok => "www.tiktok.com",
@@ -240,7 +241,7 @@ mod tests {
         }
         // 抽查几个：预热的必须是解析器真正请求的接口主机，
         // 不是平台门户——预热错了等于没预热
-        assert_eq!(warmup_host(Source::DouYin), Some("www.iesdouyin.com"));
+        assert_eq!(warmup_host(Source::DouYin), Some("www.douyin.com"));
         assert_eq!(warmup_host(Source::BiliBili), Some("api.bilibili.com"));
         // 第一跳取决于用户给的链接，没有固定目标
         assert_eq!(warmup_host(Source::KuaiShou), None);

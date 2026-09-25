@@ -257,7 +257,7 @@ fn build(data: &Value) -> Result<VideoInfo> {
         .and_then(Value::as_str)
         .unwrap_or_default();
 
-    let info = VideoInfo {
+    let mut info = VideoInfo {
         video_url,
         cover_url,
         title: util::str_at(data, &["desc"]),
@@ -278,6 +278,9 @@ fn build(data: &Value) -> Result<VideoInfo> {
     if info.is_empty() {
         return Err(Error::bare(Reason::Empty));
     }
+    // 直链必须带 Referer，否则 CDN 一律 403。直接写死，不靠按域名兜底——
+    // 抖音的 CDN 域名经常换（douyinvod / zjcdn / …），表永远追不上
+    info.set_header("Referer", "https://www.douyin.com/");
     Ok(info)
 }
 
@@ -426,6 +429,10 @@ mod tests {
         let info = build(&data).unwrap();
         // playwm -> play: 带 wm 的是有水印版本
         assert_eq!(info.video_url, "https://v.douyinvod.com/play/a.mp4");
+        assert_eq!(
+            info.video_headers.get("Referer").map(String::as_str),
+            Some("https://www.douyin.com/")
+        );
         assert_eq!(info.duration, 15.0);
         assert_eq!(info.title, "标题");
         assert_eq!(info.author.name, "作者");

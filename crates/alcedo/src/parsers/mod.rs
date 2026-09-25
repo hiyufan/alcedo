@@ -146,6 +146,7 @@ static REFERERS: &[(&str, &str)] = &[
     ("365yg.com", "https://www.douyin.com/"),
     ("snssdk.com", "https://www.douyin.com/"),
     ("bytecdn.cn", "https://www.douyin.com/"),
+    ("zjcdn.com", "https://www.douyin.com/"),
     ("kuaishou.com", "https://www.kuaishou.com/"),
     ("kwaicdn.com", "https://www.kuaishou.com/"),
     ("yximgs.com", "https://www.kuaishou.com/"),

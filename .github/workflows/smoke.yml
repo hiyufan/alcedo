@@ -19,6 +19,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# 默认 GITHUB_TOKEN 只读，开 / 关 issue 需要 issues: write
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   smoke:
     name: 对着线上平台跑一遍

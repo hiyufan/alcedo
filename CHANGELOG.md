@@ -27,7 +27,16 @@
 - 错误带结构化 `reason`，只有 `parse` 意味着解析器需要更新
 - 响应按 `Content-Type` 的 charset 解码（六间房、美拍这类老站点返回 GBK）
 
+### 性能
+- B 站两个 playurl 并发、cid 改从 pagelist 取，热连接 p50 ~250ms → ~145ms
+- 抖音 slidesinfo 优先走 `www.douyin.com`（`www.iesdouyin.com` 作退路），
+  p90 357ms → 231ms；短链跳转与领 ttwid 并发；图文笔记直接带 `request_source=200`
+- 游客身份（ttwid / buvid）过期后在宽限期内先用旧值、后台刷新
+
 ### 修复
+- B 站播放地址改走 `x/player/wbi/playurl`：老接口在同一出口高频调用后稳定 412
+- B 站 `av` 号链接一直返回 -400（av 号被当成 bvid 传给接口）
+- 西瓜视频预热的是 `www.iesdouyin.com`，与实际请求的主机不一致，预热从未生效
 - AcFun 页面结构已改为 `window.videoInfo` + `ksPlayJson`，老解析器取不到数据
 - 数字型 uid（微博、逗拍等）用取字符串的方式会静默得到空串
 - HTML 里的 JSON 改为括号配对提取，转义过的 `</script>` 不再截断数据

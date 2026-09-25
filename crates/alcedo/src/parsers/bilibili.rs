@@ -228,6 +228,10 @@ async fn page_cid(http: &Http, bvid: &str, cookie: Option<&str>) -> Option<u64> 
 
 /// 两份播放地址：DASH 分轨（fnval=4048 要 DASH，fourk=1 放开 4K）和合一流。
 ///
+/// 走 `x/player/wbi/playurl` 而不是老的 `x/player/playurl`：老接口风控严得多，
+/// 同一出口连续解析几百次后稳定 412，同一时刻新接口照常返回、内容一致。
+/// 新接口目前不校验 WBI 签名（w_rid / wts），哪天开始校验再补。
+///
 /// 两者只依赖 cid，互不等待。DASH 实际上从不带 durl，合一流几乎每次都要补，
 /// 串行就是白等一个往返（实测 ~80ms），所以一起发。
 async fn play_urls(
@@ -237,7 +241,7 @@ async fn play_urls(
     cookie: Option<&str>,
 ) -> (Result<Value>, Result<String>) {
     let dash_url = format!(
-        "https://api.bilibili.com/x/player/playurl?{}&cid={cid}\
+        "https://api.bilibili.com/x/player/wbi/playurl?{}&cid={cid}\
          &qn=127&fnval=4048&fnver=0&fourk=1&otype=json",
         id_param(bvid, "avid")
     );
@@ -252,7 +256,7 @@ async fn legacy_durl(http: &Http, bvid: &str, cid: u64, cookie: Option<&str>) ->
     let json = api_get(
         http,
         &format!(
-            "https://api.bilibili.com/x/player/playurl?{}&cid={cid}\
+            "https://api.bilibili.com/x/player/wbi/playurl?{}&cid={cid}\
              &qn=80&fnval=0&fnver=0&otype=json&platform=html5",
             id_param(bvid, "avid")
         ),

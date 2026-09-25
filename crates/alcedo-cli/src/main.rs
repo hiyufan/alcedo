@@ -168,6 +168,8 @@ fn print_help() {
 环境变量:
   ALCEDO_PROXY                所有平台的代理, 如 http://127.0.0.1:7890
   ALCEDO_PROXY_CN             只给国内平台用的代理 (境外部署时需要)
+  ALCEDO_RELAY_CN             国内出口中转地址, 优先于 ALCEDO_PROXY_CN
+  ALCEDO_RELAY_TOKEN          中转的鉴权令牌
   ALCEDO_BILI_COOKIE          B 站登录 cookie, 能拿到更高清晰度
   ALCEDO_XHS_COOKIE           小红书登录 cookie
   ALCEDO_REQUEST_TIMEOUT      单个请求超时秒数 (默认 20)

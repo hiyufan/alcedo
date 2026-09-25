@@ -92,6 +92,22 @@ pub fn url_allowed(url: &url::Url) -> bool {
     }
 }
 
+/// 走中转时目标域名是在中转那边解析的，本地的 [`SafeResolver`] 碰不到它——
+/// 请求发出去之前先在本地按同样的规则解析一遍。
+///
+/// 本地和中转那边看到的 DNS 未必一致（分区解析），所以这只能挡住"公网上就
+/// 解析到内网"的域名；中转函数所在网络自己的内网名字得靠函数那边防。
+pub async fn check_domain(host: &str) -> Result<(), String> {
+    static RESOLVER: std::sync::OnceLock<SafeResolver> = std::sync::OnceLock::new();
+    let name: Name = host.parse().map_err(|_| format!("主机名无效: {host}"))?;
+    RESOLVER
+        .get_or_init(|| SafeResolver::new(true))
+        .resolve(name)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 // ------------------------------------------------------------------ resolver
 
 const CACHE_TTL: Duration = Duration::from_secs(300);

@@ -9,6 +9,7 @@
 //! 中间那一跳的 `Location`），而且每一跳都得重新过一遍 SSRF 检查。
 
 pub mod identity;
+pub mod relay;
 pub mod resilience;
 pub mod ssrf;
 pub mod ua;
@@ -30,6 +31,10 @@ pub struct Config {
     pub proxy: Option<String>,
     /// 只给国内平台用的代理（境外部署时抖音 / 小红书这些必须走它）
     pub proxy_cn: Option<String>,
+    /// 国内出口中转（见 [`relay`]）。配了就优先于 `proxy_cn`，国内平台的解析请求都走它
+    pub relay_cn: Option<String>,
+    /// 中转的鉴权令牌
+    pub relay_token: Option<String>,
     /// 建立连接的上限
     pub connect_timeout: Duration,
     /// 单个请求的上限
@@ -71,6 +76,8 @@ impl Default for Config {
         Self {
             proxy: None,
             proxy_cn: None,
+            relay_cn: None,
+            relay_token: None,
             connect_timeout: Duration::from_secs(8),
             request_timeout: Duration::from_secs(20),
             total_timeout: Duration::from_secs(45),
@@ -94,6 +101,8 @@ impl Config {
         Config {
             proxy: env_any(&["ALCEDO_PROXY", "PARSE_VIDEO_PROXY"]),
             proxy_cn: env_any(&["ALCEDO_PROXY_CN", "PARSE_VIDEO_PROXY_CN"]),
+            relay_cn: env_any(&["ALCEDO_RELAY_CN", "PARSE_VIDEO_RELAY_CN"]),
+            relay_token: env_any(&["ALCEDO_RELAY_TOKEN", "PARSE_VIDEO_RELAY_TOKEN"]),
             connect_timeout: env_secs("ALCEDO_CONNECT_TIMEOUT", d.connect_timeout),
             request_timeout: env_secs("ALCEDO_REQUEST_TIMEOUT", d.request_timeout),
             total_timeout: env_secs("ALCEDO_TOTAL_TIMEOUT", d.total_timeout),
@@ -117,7 +126,8 @@ impl Config {
     }
 
     fn proxy_for(&self, source: Option<Source>) -> Option<&str> {
-        if source.is_some_and(Source::is_cn) {
+        // 走中转时连的是中转本身，不需要国内代理，用兜底代理即可
+        if source.is_some_and(Source::is_cn) && self.relay_cn.is_none() {
             if let Some(p) = self.proxy_cn.as_deref() {
                 return Some(p);
             }
@@ -461,18 +471,31 @@ pub struct Http {
     cfg: Arc<Config>,
     user_agent: &'static str,
     source: Option<Source>,
+    relay: Option<Arc<relay::Relay>>,
 }
 
 impl Http {
-    /// 建一个句柄。会按平台挑代理，并定下本次解析用的 UA。
+    /// 建一个句柄。会按平台挑代理 / 中转，并定下本次解析用的 UA。
     pub fn new(cfg: Arc<Config>, source: Option<Source>) -> Result<Self> {
         let client = client_for(&cfg, cfg.proxy_for(source))?;
+        let relay = match cfg.relay_cn.as_deref() {
+            Some(ep) if source.is_some_and(Source::is_cn) => {
+                Some(Arc::new(relay::Relay::new(ep, cfg.relay_token.as_deref())?))
+            }
+            _ => None,
+        };
         Ok(Self {
             client,
             cfg,
             user_agent: ua::pick(ua::Platform::Ios),
             source,
+            relay,
         })
+    }
+
+    /// 请求是否经国内中转发出。
+    pub fn is_relayed(&self) -> bool {
+        self.relay.is_some()
     }
 
     /// 当前配置。
@@ -565,13 +588,14 @@ impl Http {
                 ));
             }
 
-            let mut builder = self
-                .client
-                .request(req.method.clone(), parsed.clone())
-                .header("User-Agent", self.user_agent)
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-
             let mut header_map = HeaderMap::new();
+            if let Ok(val) = HeaderValue::from_str(self.user_agent) {
+                header_map.insert("user-agent", val);
+            }
+            header_map.insert(
+                "accept-language",
+                HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
+            );
             for (k, v) in &req.headers {
                 if let (Ok(name), Ok(val)) = (k.parse::<HeaderName>(), HeaderValue::from_str(v)) {
                     header_map.insert(name, val);
@@ -590,16 +614,38 @@ impl Http {
                     }
                 }
             }
-            builder = builder.headers(header_map);
 
-            if let Some(b) = &req.body {
-                builder = builder.body(b.clone());
-            }
-
-            let resp = builder.send().await?;
-            let status = resp.status();
-            let headers = resp.headers().clone();
-            let final_url = resp.url().to_string();
+            let (status, headers, resp) = if let Some(relay) = &self.relay {
+                // 目标域名在中转那边解析，本地的 DNS 拦截管不到，得先查一遍
+                if let (true, Some(url::Host::Domain(d))) = (self.cfg.ssrf_enforce, parsed.host()) {
+                    ssrf::check_domain(d)
+                        .await
+                        .map_err(|e| Error::new(Reason::Network, e))?;
+                }
+                let resp = relay
+                    .wrap(
+                        &self.client,
+                        &req.method,
+                        &parsed,
+                        &header_map,
+                        req.body.as_deref(),
+                    )
+                    .send()
+                    .await?;
+                relay::unwrap(resp).await?
+            } else {
+                let mut builder = self
+                    .client
+                    .request(req.method.clone(), parsed.clone())
+                    .headers(header_map);
+                if let Some(b) = &req.body {
+                    builder = builder.body(b.clone());
+                }
+                let resp = builder.send().await?;
+                (resp.status(), resp.headers().clone(), resp)
+            };
+            // 不交给 reqwest 跟跳转，最终地址就是这一跳的地址
+            let final_url = parsed.to_string();
 
             // 跟下一跳之前先把本跳的 cookie 收好
             for (k, v) in cookies_from(&headers) {

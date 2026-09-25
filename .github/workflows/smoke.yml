@@ -45,6 +45,8 @@ jobs:
           ALCEDO_CACHE_TTL: "0"
           ALCEDO_PROXY: ${{ secrets.ALCEDO_PROXY }}
           ALCEDO_PROXY_CN: ${{ secrets.ALCEDO_PROXY_CN }}
+          ALCEDO_RELAY_CN: ${{ secrets.ALCEDO_RELAY_CN }}
+          ALCEDO_RELAY_TOKEN: ${{ secrets.ALCEDO_RELAY_TOKEN }}
           ALCEDO_BILI_COOKIE: ${{ secrets.ALCEDO_BILI_COOKIE }}
           ALCEDO_XHS_COOKIE: ${{ secrets.ALCEDO_XHS_COOKIE }}
           ALCEDO_YOUTUBE_COOKIE: ${{ secrets.ALCEDO_YOUTUBE_COOKIE }}

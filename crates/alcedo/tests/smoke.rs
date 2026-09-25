@@ -9,7 +9,7 @@
 //! cargo test -p alcedo --test smoke -- --ignored bilibili --nocapture   # 只跑一个
 //! ```
 //!
-//! 国内平台在境外机器上跑需要 `ALCEDO_PROXY_CN`，YouTube / X 这些在国内需要 `ALCEDO_PROXY`。
+//! 国内平台在境外机器上跑需要 `ALCEDO_PROXY_CN` 或 `ALCEDO_RELAY_CN`，YouTube / X 这些在国内需要 `ALCEDO_PROXY`。
 
 use alcedo::{Client, VideoInfo};
 

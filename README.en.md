@@ -220,6 +220,8 @@ start with environment settings before changing individual fields.
 | --- | --- | --- |
 | `ALCEDO_PROXY` | Proxy for every platform, e.g. `http://127.0.0.1:7890`, `socks5://...` | none |
 | `ALCEDO_PROXY_CN` | Preferred proxy for Chinese platforms; falls back to `ALCEDO_PROXY` when unset | none |
+| `ALCEDO_RELAY_CN` | Mainland-China egress relay (a forwarding function on a Chinese edge platform, e.g. `https://example.com/relay`); when set, parse requests for Chinese platforms go through it, taking precedence over `ALCEDO_PROXY_CN` | none |
+| `ALCEDO_RELAY_TOKEN` | Auth token for the relay; must match `TOKEN` in the relay function | none |
 | `ALCEDO_BILI_COOKIE` | Bilibili login cookie; available quality depends on account and content permissions | none |
 | `ALCEDO_XHS_COOKIE` | Xiaohongshu cookie for requests that require sign-in | none |
 | `ALCEDO_DOUYIN_COOKIE` | Douyin cookie; when set, no anonymous identity is fetched | none |

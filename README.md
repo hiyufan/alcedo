@@ -213,6 +213,8 @@ let client = Client::with_config(Config {
 | --- | --- | --- |
 | `ALCEDO_PROXY` | 所有平台的代理，如 `http://127.0.0.1:7890`、`socks5://...` | 无 |
 | `ALCEDO_PROXY_CN` | 国内平台优先使用的代理，未设置时使用 `ALCEDO_PROXY` | 无 |
+| `ALCEDO_RELAY_CN` | 国内出口中转地址（部署在国内边缘函数上的转发函数，如 `https://example.com/relay`），配置后国内平台的解析请求都经它发出，优先于 `ALCEDO_PROXY_CN` | 无 |
+| `ALCEDO_RELAY_TOKEN` | 中转的鉴权令牌，与中转函数里的 `TOKEN` 一致 | 无 |
 | `ALCEDO_BILI_COOKIE` | B 站登录 cookie，可用清晰度取决于账号和内容权限 | 无 |
 | `ALCEDO_XHS_COOKIE` | 小红书登录 cookie，用于需要登录的访问 | 无 |
 | `ALCEDO_DOUYIN_COOKIE` | 抖音 cookie；配了就不再去领匿名身份 | 无 |

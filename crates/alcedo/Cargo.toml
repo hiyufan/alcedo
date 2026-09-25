@@ -36,7 +36,7 @@ bytes = { workspace = true }
 # 平台页面偶尔返回 GBK（老站点尤其），from_utf8_lossy 会得到一堆问号
 encoding_rs = "0.8"
 scraper = { version = "0.23", default-features = false }
-base64 = "0.22"
+base64 = "0.23"
 percent-encoding = "2"
 rand = "0.9"
 parking_lot = "0.12"

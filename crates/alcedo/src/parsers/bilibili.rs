@@ -101,10 +101,12 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
         // DASH 的每一档都是分离轨，浏览器点开是播不了的，必须另外要一条合一流。
         //
         // 这一步不能因为"已经有 formats 了"就跳过：没有它前端就没有可直接播放
-        // 的地址。顺带一提，html5 平台这条路不登录也能给到 720p，比 DASH 那边
-        // 未登录只给 360/480 更高——所以它同时也是清晰度的补充。
+        // 的地址。高度也要记下：上层靠它判断 DASH 里哪些档比这条更清晰。
         match legacy {
-            Ok(u) if !u.is_empty() => info.video_url = u,
+            Ok(p) if !p.url.is_empty() => {
+                info.video_url = p.url;
+                info.height = p.height;
+            }
             Ok(_) => {}
             Err(e) => tracing::debug!(error = %e, "B 站合一流拿不到，只剩 DASH 档位"),
         }
@@ -239,7 +241,7 @@ async fn play_urls(
     bvid: &str,
     cid: u64,
     cookie: Option<&str>,
-) -> (Result<Value>, Result<String>) {
+) -> (Result<Value>, Result<Progressive>) {
     let mut dash_url = format!(
         "https://api.bilibili.com/x/player/wbi/playurl?{}&cid={cid}\
          &qn=127&fnval=4048&fnver=0&fourk=1&otype=json",
@@ -306,8 +308,20 @@ fn guest_query() -> String {
     )
 }
 
-/// 老接口的合一流，作为 DASH 不可用时的退路。
-async fn legacy_durl(http: &Http, bvid: &str, cid: u64, cookie: Option<&str>) -> Result<String> {
+/// 浏览器能直接播放的那条合一流。
+struct Progressive {
+    url: String,
+    /// 短边；认不出清晰度时为 0
+    height: u32,
+}
+
+/// html5 平台的合一流（音视频在一起的 mp4），不登录一般给到 720p。
+async fn legacy_durl(
+    http: &Http,
+    bvid: &str,
+    cid: u64,
+    cookie: Option<&str>,
+) -> Result<Progressive> {
     let json = api_get(
         http,
         &format!(
@@ -318,7 +332,24 @@ async fn legacy_durl(http: &Http, bvid: &str, cid: u64, cookie: Option<&str>) ->
         cookie,
     )
     .await?;
-    Ok(util::str_at(&json, &["data", "durl", "0", "url"]))
+    Ok(Progressive {
+        url: util::str_at(&json, &["data", "durl", "0", "url"]),
+        height: quality_height(util::i64_at(&json, &["data", "quality"])),
+    })
+}
+
+/// 清晰度 id -> 短边。合一流的响应里只有 quality，没有宽高。
+fn quality_height(qn: i64) -> u32 {
+    match qn {
+        6 => 240,
+        16 => 360,
+        32 => 480,
+        64 | 74 => 720,
+        80 | 112 | 116 => 1080,
+        120 | 125 | 126 => 2160,
+        127 => 4320,
+        _ => 0,
+    }
 }
 
 /// 把 DASH 的音视频轨配成一档档清晰度。
@@ -415,6 +446,13 @@ mod tests {
         let v: Value = serde_json::from_str(&inter).unwrap();
         assert_eq!(v["wh"].as_array().unwrap().len(), 3);
         assert_eq!(v["of"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn progressive_quality_maps_to_short_side() {
+        assert_eq!(quality_height(64), 720);
+        assert_eq!(quality_height(80), 1080);
+        assert_eq!(quality_height(999), 0);
     }
 
     #[test]

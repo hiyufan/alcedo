@@ -35,6 +35,8 @@
 
 ### 修复
 - B 站播放地址改走 `x/player/wbi/playurl`：老接口在同一出口高频调用后稳定 412
+- B 站未登录只能拿到 360p / 480p：DASH 请求补上 `try_look=1` 和浏览器指纹参数（`dm_*`），
+  游客也能拿到 720p / 1080p
 - B 站 `av` 号链接一直返回 -400（av 号被当成 bvid 传给接口）
 - 西瓜视频预热的是 `www.iesdouyin.com`，与实际请求的主机不一致，预热从未生效
 - AcFun 页面结构已改为 `window.videoInfo` + `ksPlayJson`，老解析器取不到数据

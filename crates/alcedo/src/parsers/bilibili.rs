@@ -240,14 +240,69 @@ async fn play_urls(
     cid: u64,
     cookie: Option<&str>,
 ) -> (Result<Value>, Result<String>) {
-    let dash_url = format!(
+    let mut dash_url = format!(
         "https://api.bilibili.com/x/player/wbi/playurl?{}&cid={cid}\
          &qn=127&fnval=4048&fnver=0&fourk=1&otype=json",
         id_param(bvid, "avid")
     );
+    if http.config().bilibili_cookie.is_none() {
+        dash_url.push_str(&guest_query());
+    }
     tokio::join!(
         api_get(http, &dash_url, cookie),
         legacy_durl(http, bvid, cid, cookie),
+    )
+}
+
+/// 游客也要到 720p / 1080p 的 DASH 档位，返回以 `&` 开头的查询串。
+///
+/// `try_look=1` 是 B 站给游客"试看高清"的开关，但只有同时带上浏览器指纹参数
+/// （`dm_*`）才生效，缺一个就只给 360 / 480。实测带上之后 1080p 照给，WBI
+/// 签名反而不是必须的。做法照 yt-dlp（来源是 B 站自己的
+/// bili-user-fingerprint.js）：这些值本来就是前端随机造的，鼠标轨迹那两项留空也能过。
+fn guest_query() -> String {
+    use base64::Engine;
+    use rand::Rng;
+
+    // 对应前端 / yt-dlp 里的 string.printable（不含换行这类控制字符也不影响）
+    const PRINTABLE: &[u8] =
+        b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%&()*+,-./:;<=>?@[]^_{|}~ ";
+
+    let mut rng = rand::rng();
+    let mut noise = |lo: usize, hi: usize| {
+        let len = rng.random_range(lo..=hi);
+        let raw: Vec<u8> = (0..len)
+            .map(|_| PRINTABLE[rng.random_range(0..PRINTABLE.len())])
+            .collect();
+        let mut b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+        // 前端的实现会砍掉最后两个字符，照做
+        b64.truncate(b64.len().saturating_sub(2));
+        b64
+    };
+    let img_str = noise(16, 64);
+    let cover_str = noise(32, 128);
+
+    let (r, o, top) = (
+        rng.random_range(0..114_i64),
+        rng.random_range(0..514_i64),
+        rng.random_range(0..=100_i64),
+    );
+    // 屏幕 1920x1080 时的 wh / of 编码；serde_json 输出本来就是紧凑的，B 站要求不能有空格
+    let inter = serde_json::json!({
+        "ds": [],
+        "wh": [2 * 1920 + 2 * 1080 + 3 * r, 4 * 1920 - 1080 + r, r],
+        "of": [3 * top + o, 4 * top + 2 * o, o],
+    })
+    .to_string();
+
+    let enc = |v: &str| {
+        percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC).to_string()
+    };
+    format!(
+        "&try_look=1&dm_img_list=%5B%5D&dm_img_str={}&dm_cover_img_str={}&dm_img_inter={}",
+        enc(&img_str),
+        enc(&cover_str),
+        enc(&inter)
     )
 }
 
@@ -346,6 +401,20 @@ mod tests {
         assert_eq!(id_param("AV2", "avid"), "avid=2");
         // 不是纯数字的别误判
         assert_eq!(id_param("avatar", "aid"), "bvid=avatar");
+    }
+
+    #[test]
+    fn guest_query_shape() {
+        let q = guest_query();
+        assert!(q.starts_with("&try_look=1&"), "{q}");
+        let inter = q.split("dm_img_inter=").nth(1).unwrap();
+        let inter = percent_encoding::percent_decode_str(inter)
+            .decode_utf8()
+            .unwrap();
+        assert!(!inter.contains(' '), "B 站要紧凑 JSON: {inter}");
+        let v: Value = serde_json::from_str(&inter).unwrap();
+        assert_eq!(v["wh"].as_array().unwrap().len(), 3);
+        assert_eq!(v["of"].as_array().unwrap().len(), 3);
     }
 
     #[test]

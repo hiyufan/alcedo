@@ -36,7 +36,10 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     // 播放地址只依赖 cid，作品信息（标题、封面、作者）只用来填展示字段，两条线
     // 互不等待。cid 从 pagelist 拿：它只有两百来字节，比 view 快 ~27ms，这样
     // 关键路径是 pagelist → playurl，view 在旁边并行跑完。
-    let view_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
+    let view_url = format!(
+        "https://api.bilibili.com/x/web-interface/view?{}",
+        id_param(bvid, "aid")
+    );
     let (view, early) = tokio::join!(api_get(&http, &view_url, cookie), async {
         let cid = page_cid(&http, bvid, cookie).await?;
         Some(play_urls(&http, bvid, cid, cookie).await)
@@ -200,9 +203,25 @@ async fn api_get(http: &Http, url: &str, cookie: Option<&str>) -> Result<Value> 
     Err(Error::blocked("B 站连续返回 412"))
 }
 
+/// 接口里的作品参数。BV 号走 `bvid=`；老的 av 号要换成纯数字——
+/// 把 `av170001` 原样塞给 bvid，B 站只会回一个 -400。
+///
+/// av 号的参数名各接口不统一：view / pagelist 认 `aid`，playurl 只认 `avid`。
+fn id_param(id: &str, aid_key: &str) -> String {
+    match id.strip_prefix("av").or_else(|| id.strip_prefix("AV")) {
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{aid_key}={n}")
+        }
+        _ => format!("bvid={id}"),
+    }
+}
+
 /// 第一 P 的 cid。拿不到返回 `None`，由调用方退回 view 里的那份。
 async fn page_cid(http: &Http, bvid: &str, cookie: Option<&str>) -> Option<u64> {
-    let url = format!("https://api.bilibili.com/x/player/pagelist?bvid={bvid}");
+    let url = format!(
+        "https://api.bilibili.com/x/player/pagelist?{}",
+        id_param(bvid, "aid")
+    );
     let json = api_get(http, &url, cookie).await.ok()?;
     Some(util::u64_at(&json, &["data", "0", "cid"])).filter(|&c| c != 0)
 }
@@ -218,8 +237,9 @@ async fn play_urls(
     cookie: Option<&str>,
 ) -> (Result<Value>, Result<String>) {
     let dash_url = format!(
-        "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}\
-         &qn=127&fnval=4048&fnver=0&fourk=1&otype=json"
+        "https://api.bilibili.com/x/player/playurl?{}&cid={cid}\
+         &qn=127&fnval=4048&fnver=0&fourk=1&otype=json",
+        id_param(bvid, "avid")
     );
     tokio::join!(
         api_get(http, &dash_url, cookie),
@@ -232,8 +252,9 @@ async fn legacy_durl(http: &Http, bvid: &str, cid: u64, cookie: Option<&str>) ->
     let json = api_get(
         http,
         &format!(
-            "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}\
-             &qn=80&fnval=0&fnver=0&otype=json&platform=html5"
+            "https://api.bilibili.com/x/player/playurl?{}&cid={cid}\
+             &qn=80&fnval=0&fnver=0&otype=json&platform=html5",
+            id_param(bvid, "avid")
         ),
         cookie,
     )
@@ -313,6 +334,15 @@ fn quality_label(id: i64, short: u32, codec: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn av_ids_use_the_aid_parameter() {
+        assert_eq!(id_param("BV1GJ411x7h7", "aid"), "bvid=BV1GJ411x7h7");
+        assert_eq!(id_param("av170001", "aid"), "aid=170001");
+        assert_eq!(id_param("AV2", "avid"), "avid=2");
+        // 不是纯数字的别误判
+        assert_eq!(id_param("avatar", "aid"), "bvid=avatar");
+    }
 
     #[test]
     fn quality_labels() {

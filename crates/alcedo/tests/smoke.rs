@@ -191,7 +191,11 @@ async fn vimeo() {
 #[tokio::test]
 #[ignore = "要联网"]
 async fn dailymotion() {
-    let info = parse("https://www.dailymotion.com/video/xb9ctgi").await;
+    // 上一条 fixture xb9ctgi 在 2026-09 被 Dailymotion 下架（410 DM005，
+    // "removed due to a breach of the Terms of Use"），换这条 2020 年的老视频。
+    // 挑 fixture 的标准：够老（活得久）、全球可看（DM005 "Content rejected"
+    // 也会报地区/版权限制，别选只有部分地区能看的）。
+    let info = parse("https://www.dailymotion.com/video/x7witr7").await;
     assert_usable(&info);
 }
 

@@ -223,10 +223,22 @@ async fn bytedance_guest_identity() {
     let cfg = std::sync::Arc::new(alcedo::Config::from_env());
     let http = alcedo::http::Http::new(cfg, Some(alcedo::Source::DouYin)).unwrap();
 
-    alcedo::http::identity::forget_bytedance();
-    let first = alcedo::http::identity::bytedance_ttwid(&http).await;
-    let Some(ttwid) = first else {
-        panic!("领不到 ttwid——这个端点一直是免签名的，挂了说明抖音改了规则");
+    // ttwid 注册端点对机房 IP 是间歇性抽风（同一台 runner 上一轮还能领到，
+    // 下一轮就空手而归），连着几次都领不到才说明真改了规则
+    let mut ttwid = None;
+    for attempt in 1..=3 {
+        alcedo::http::identity::forget_bytedance();
+        match alcedo::http::identity::bytedance_ttwid(&http).await {
+            Some(t) => {
+                ttwid = Some(t);
+                break;
+            }
+            None if attempt < 3 => tokio::time::sleep(std::time::Duration::from_secs(3)).await,
+            None => {}
+        }
+    }
+    let Some(ttwid) = ttwid else {
+        panic!("重试 3 次都领不到 ttwid——这个端点一直是免签名的，挂了说明抖音改了规则");
     };
     println!("ttwid = {}…", &ttwid[..ttwid.len().min(24)]);
     assert!(ttwid.len() > 20, "ttwid 看着不像真的: {ttwid}");

@@ -265,7 +265,7 @@ async fn play_urls(
 /// bili-user-fingerprint.js）：这些值本来就是前端随机造的，鼠标轨迹那两项留空也能过。
 fn guest_query() -> String {
     use base64::Engine;
-    use rand::Rng;
+    use rand::RngExt;
 
     // 对应前端 / yt-dlp 里的 string.printable（不含换行这类控制字符也不影响）
     const PRINTABLE: &[u8] =

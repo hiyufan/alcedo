@@ -8,27 +8,41 @@
 //! ```text
 //! GET /parse?url=<链接或分享文案>      解析
 //! GET /parse?source=douyin&id=<作品ID> 已知平台和 ID 时直接解析
+//! GET /parse?media=1                   响应里附上各直链的签名代理地址
+//! GET /media?url=<地址>&e=<过期>&s=<签名>
+//!                                      签名媒体代理：浏览器 <video>/<img>
+//!                                      直接用，不用管 CDN 的 Referer
 //! GET /health                          存活检查（缓存条数、中继保温、按平台×原因的解析统计）
 //! ```
 //!
 //! 成功返回 200 + `VideoInfo` 的 JSON；失败返回对应状态码 +
 //! `{"reason": "...", "message": "...", "detail": "..."}`，`reason` 取值见
 //! [`alcedo::Reason`]。
+//!
+//! `/media` 故意**不**检查 Bearer 令牌——浏览器放不了自定义请求头，签名本身
+//! 就是这一层的鉴权；而能拿到签名的前提是调过（令牌保护的）/parse。签名密钥
+//! 优先取 `ALCEDO_MEDIA_SECRET`，没配就进程启动时随机生成（重启后旧签名
+//! 全部失效；要跨重启有效就显式配一个）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use alcedo::{Client, Reason, Source};
+use alcedo::{Client, Reason, Source, VideoInfo};
+use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::Semaphore;
+
+use crate::media;
 
 /// 默认只听本机：这是给同机上的网站调的，不是公网服务。
 const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
@@ -45,6 +59,10 @@ const KEEP_WARM_EVERY: Duration = Duration::from_secs(240);
 /// 空请求，边缘函数直接 400，不对任何平台产生出站流量——冷握手实测
 /// 1.3s，热连接 0.18s，一个空来回换掉这 1.1s 很划算。
 const RELAY_KEEPALIVE_EVERY: Duration = Duration::from_secs(60);
+
+/// /media 的并发转发槽。媒体转发是长流，一个浏览器拖着 `<video>` 能开
+/// 好几十条 Range 请求，不设闸的话几个播放器就能把出口占满。
+const MAX_MEDIA_STREAMS: usize = 16;
 
 /// 服务配置，来自命令行参数和环境变量。
 #[derive(Debug)]
@@ -101,6 +119,8 @@ struct AppState {
     client: Client,
     token: Option<String>,
     stats: Stats,
+    /// /media 的转发槽
+    media_streams: Arc<Semaphore>,
 }
 
 /// 按平台 × 原因累计解析结果，挂在 `/health` 上。
@@ -167,9 +187,11 @@ pub(crate) async fn run(opts: Options) -> Result<(), String> {
         client,
         token: opts.token.clone(),
         stats: Stats::default(),
+        media_streams: Arc::new(Semaphore::new(MAX_MEDIA_STREAMS)),
     });
     let app = Router::new()
         .route("/parse", get(parse))
+        .route("/media", get(media))
         .route("/health", get(health))
         .with_state(state);
 
@@ -202,6 +224,8 @@ struct ParseQuery {
     url: Option<String>,
     source: Option<String>,
     id: Option<String>,
+    /// 1 = 响应里附上各直链对应的签名代理地址（`media` 字段，见 `/media`）
+    media: Option<u8>,
 }
 
 async fn parse(
@@ -244,7 +268,11 @@ async fn parse(
             let src = info.source.map_or("?", Source::as_str);
             state.stats.record(src, "ok");
             eprintln!("parse ok   {src:<10} {ms:>5}ms  {}", shorten(&what));
-            Json(info).into_response()
+            let mut payload = serde_json::to_value(&info).expect("VideoInfo 序列化不会失败");
+            if q.media == Some(1) {
+                payload["media"] = serde_json::to_value(media_map(&info)).unwrap_or_default();
+            }
+            Json(payload).into_response()
         }
         Err(e) => {
             state.stats.record(label, e.reason.as_str());
@@ -271,6 +299,189 @@ async fn health(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         "stats": state.stats.snapshot(),
     }))
     .into_response()
+}
+
+// ---------------------------------------------------------------- 签名媒体代理
+
+/// 签名的有效期。要盖住各平台直链自身的寿命（B 站 2 小时是最长的常规档），
+/// 又不能长到让泄露的签名变成永久通行证。
+const MEDIA_TTL_SECS: u64 = 6 * 3600;
+
+/// 签名密钥。`ALCEDO_MEDIA_SECRET` 优先；没配就进程启动时从系统熵生成一个
+/// 随机的——重启后旧签名全部失效，要跨重启有效就显式配一个。
+fn media_secret() -> &'static [u8] {
+    static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
+    SECRET
+        .get_or_init(|| match std::env::var("ALCEDO_MEDIA_SECRET") {
+            Ok(s) if !s.trim().is_empty() => s.trim().as_bytes().to_vec(),
+            _ => {
+                // RandomState 每次构造都从操作系统取熵（SipHash 的密钥），拼 4 段
+                // 64 位凑 32 字节。密钥生命周期只有进程本身，不值得为此多拉依赖
+                use std::hash::{BuildHasher, Hasher};
+                (0..4u64)
+                    .flat_map(|i| {
+                        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+                        h.write_u64(i);
+                        h.finish().to_le_bytes()
+                    })
+                    .collect()
+            }
+        })
+        .as_slice()
+}
+
+/// `url` + 过期时刻的 HMAC-SHA256，取前 32 个十六进制位（对齐 Python 侧 net.sign）。
+fn media_sign(url: &str, exp: u64) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = Hmac::<Sha256>::new_from_slice(media_secret()).expect("HMAC 接受任意长度密钥");
+    mac.update(url.as_bytes());
+    mac.update(b"\n");
+    mac.update(exp.to_string().as_bytes());
+    let digest = mac.finalize().into_bytes();
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    hex[..32].to_owned()
+}
+
+/// 给一条直链生成 `/media` 代理地址（相对路径，同源直接拼）。
+fn signed_media_path(url: &str) -> String {
+    let exp = unix_now() + MEDIA_TTL_SECS;
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("url", url)
+        .append_pair("e", &exp.to_string())
+        .append_pair("s", &media_sign(url, exp))
+        .finish();
+    format!("/media?{query}")
+}
+
+/// `?media=1` 时响应里附带的 `media` 字段：直链 → 签名代理地址。
+/// 浏览器拿代理地址就能播 / 能下载，CDN 的 Referer 与跳转都不用上层操心。
+fn media_map(info: &VideoInfo) -> BTreeMap<String, String> {
+    let mut raw: Vec<&str> = vec![info.video_url.as_str(), info.cover_url.as_str()];
+    for img in &info.images {
+        raw.push(img.url.as_str());
+        raw.push(img.live_photo_url.as_str());
+    }
+    for f in &info.formats {
+        raw.push(f.url.as_str());
+        raw.push(f.video_url.as_str());
+        raw.push(f.audio_url.as_str());
+    }
+    let mut seen = HashSet::new();
+    raw.into_iter()
+        .filter(|u| !u.is_empty() && seen.insert(*u))
+        .map(|u| (u.to_owned(), signed_media_path(u)))
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct MediaQuery {
+    url: String,
+    /// 过期时刻（Unix 秒），参与签名
+    e: Option<u64>,
+    /// 签名
+    s: Option<String>,
+}
+
+/// 签名媒体代理：只转发自己解析出来的地址。
+///
+/// 签名对（url + 过期时刻）验证、逐条过 SSRF 的协议与主机名检查、按 CDN
+/// 域名补 Referer，`Range` 原样透传（播放器拖进度条全靠它），响应头白名单
+/// 透传。3xx 原样交回给浏览器自己跟——我们不为一个不认识的目标站掏 DNS。
+async fn media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<MediaQuery>,
+) -> Response {
+    let exp = q.e.unwrap_or(0);
+    if exp <= unix_now() {
+        return forbidden("签名已过期，重新解析再拿");
+    }
+    if !constant_time_eq(
+        media_sign(&q.url, exp).as_bytes(),
+        q.s.as_deref().unwrap_or("").as_bytes(),
+    ) {
+        return forbidden("签名不对，这个地址不是解析结果里给的");
+    }
+    let parsed = match url::Url::parse(&q.url) {
+        Ok(u) => u,
+        Err(_) => return error_response(Reason::Unsupported, "地址无效"),
+    };
+    if !alcedo::http::ssrf::url_allowed(&parsed) {
+        return error_response(Reason::Unsupported, "不允许的地址");
+    }
+
+    let mut upstream = media::client()
+        .get(parsed)
+        .headers(media::headers_for(&q.url));
+    if let Some(range) = headers.get("range").and_then(|v| v.to_str().ok()) {
+        upstream = upstream.header("range", range);
+    }
+    let resp = match upstream.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"reason": "network", "message": format!("拉取失败: {e}")})),
+            )
+                .into_response()
+        }
+    };
+
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut out = HeaderMap::new();
+    for key in [
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+        "etag",
+        "last-modified",
+        "location",
+    ] {
+        if let Some(v) = resp.headers().get(key) {
+            out.insert(key, v.clone());
+        }
+    }
+    if status.is_success() && !out.contains_key("accept-ranges") {
+        out.insert("accept-ranges", HeaderValue::from_static("bytes"));
+    }
+    out.insert(
+        "cache-control",
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+
+    // 满了就明确拒绝，别让第 17 条流把前 16 条挤成慢动作
+    let permit = match state.media_streams.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"reason": "blocked", "message": "转发通道满了，稍后再试"})),
+            )
+                .into_response()
+        }
+    };
+    // 令牌搬进响应体里：流断它才走，不能在 handler 返回时提前释放
+    let body = Body::from_stream(resp.bytes_stream().map(move |chunk| {
+        let _permit = &permit;
+        chunk
+    }));
+    (status, out, body).into_response()
+}
+
+fn forbidden(message: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"reason": "forbidden", "message": message})),
+    )
+        .into_response()
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// 配了 `ALCEDO_SERVE_TOKEN` 就要求 `Authorization: Bearer <token>`。
@@ -396,5 +607,51 @@ mod tests {
         assert_eq!(snap["douyin"]["deleted"], 1);
         assert_eq!(snap["-"]["unsupported"], 1);
         assert!(!snap.contains_key("bilibili"), "没出现的平台不该有条目");
+    }
+
+    #[test]
+    fn media_signing_round_trip_and_tamper() {
+        let url = "https://v11.365yg.com/a.mp4?x=1";
+        let exp = unix_now() + 60;
+        let sig = media_sign(url, exp);
+        assert_eq!(sig.len(), 32);
+        // url / exp 任何一边被动过都通不过
+        assert_ne!(media_sign("https://v11.365yg.com/a.mp4?x=2", exp), sig);
+        assert_ne!(media_sign(url, exp + 1), sig);
+
+        // 签名地址拆回来的参数要能原样验过——前端只管整条拿来用
+        let path = signed_media_path(url);
+        assert!(path.starts_with("/media?url="), "{path}");
+        let pairs: Vec<(String, String)> = url::Url::parse(&format!("https://serve{path}"))
+            .unwrap()
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        let u = &pairs.iter().find(|(k, _)| k == "url").unwrap().1;
+        let e = &pairs.iter().find(|(k, _)| k == "e").unwrap().1;
+        let s = &pairs.iter().find(|(k, _)| k == "s").unwrap().1;
+        assert_eq!(u, url);
+        assert_eq!(
+            media_sign(u, e.parse().unwrap()),
+            *s,
+            "round-trip 必须能验过"
+        );
+    }
+
+    #[test]
+    fn media_map_dedups_and_skips_empty() {
+        let info = VideoInfo {
+            video_url: "https://cdn/a.mp4".into(),
+            cover_url: "https://cdn/cover.jpg".into(),
+            formats: vec![alcedo::Format {
+                url: "https://cdn/a.mp4".into(),
+                ..alcedo::Format::direct("720p", "", 720)
+            }],
+            ..Default::default()
+        };
+        let m = media_map(&info);
+        assert_eq!(m.len(), 2, "重复与空地址不该出现");
+        assert!(m.contains_key("https://cdn/a.mp4"));
+        assert!(m.contains_key("https://cdn/cover.jpg"));
     }
 }

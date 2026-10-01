@@ -182,19 +182,7 @@ impl Cache {
     /// 这条结果能缓存多久。`None` = 别缓存。
     fn effective_ttl(&self, info: &VideoInfo) -> Option<Duration> {
         let now_unix = unix_now()?;
-
-        // 结果里所有地址中最早的那个过期时刻说了算
-        let earliest = std::iter::once(info.video_url.as_str())
-            .chain(
-                info.formats
-                    .iter()
-                    .flat_map(|f| [f.url.as_str(), f.video_url.as_str(), f.audio_url.as_str()]),
-            )
-            .filter(|u| !u.is_empty())
-            .filter_map(url_expiry)
-            .min();
-
-        match earliest {
+        match earliest_expiry(info) {
             Some(exp) => {
                 // 已经过期或快到期的，缓存了也是给用户一个 403
                 let remain = exp.saturating_sub(now_unix);
@@ -232,6 +220,23 @@ fn unix_now() -> Option<u64> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|d| d.as_secs())
+}
+
+/// 结果里所有直链中最早的那个过期时刻（Unix 秒）。
+///
+/// 主播封面、图集这类没有直链的结果返回 `None`——那不是"马上过期"，而是
+/// "读不出"，调用方自己决定按什么兜底。[`crate::model::VideoInfo`] 的
+/// `expires_at` 字段就是这个值。
+pub fn earliest_expiry(info: &VideoInfo) -> Option<u64> {
+    std::iter::once(info.video_url.as_str())
+        .chain(
+            info.formats
+                .iter()
+                .flat_map(|f| [f.url.as_str(), f.video_url.as_str(), f.audio_url.as_str()]),
+        )
+        .filter(|u| !u.is_empty())
+        .filter_map(url_expiry)
+        .min()
 }
 
 /// 从直链里读出它自己的过期时刻（Unix 秒）。
@@ -485,6 +490,27 @@ mod tests {
         assert!(cache.get("hot").is_some(), "命中多的那条不该被淘汰");
         assert!(cache.get("new").is_some());
         assert!(cache.get("cold").is_none(), "最冷的那条该被淘汰");
+    }
+
+    #[test]
+    fn earliest_expiry_takes_the_min_and_reports_none_when_unreadable() {
+        let mut info = info_with(&format!("https://x/a.mp4?deadline={}", now() + 7200));
+        info.formats.push(Format {
+            url: format!("https://x/b.mp4?deadline={}", now() + 300),
+            ..Format::direct("720p", "", 720)
+        });
+        let exp = earliest_expiry(&info).expect("应当读得出");
+        assert!(
+            (exp as i64 - (now() + 300) as i64).abs() <= 1,
+            "该取最早的那个"
+        );
+
+        // 图集没有带签名的直链，读不出就是 None，调用方自己兜底
+        let gallery = VideoInfo {
+            images: vec![crate::model::Image::new("https://x/1.jpg")],
+            ..Default::default()
+        };
+        assert_eq!(earliest_expiry(&gallery), None);
     }
 
     #[test]

@@ -470,6 +470,11 @@ pub struct VideoInfo {
     /// 访问直链时必须附带的请求头（Referer / Cookie 等）
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub video_headers: BTreeMap<String, String>,
+    /// 直链的过期时刻（Unix 秒），从直链自身的签名参数里读出（见
+    /// `cache::earliest_expiry`）；0 = 读不出（图集、HLS 或平台没给）。
+    /// 上层可以在播放前比对这个值，快到期就先重新解析再播。
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub expires_at: u64,
 }
 
 impl VideoInfo {
@@ -614,5 +619,18 @@ mod tests {
         assert!(Source::BiliBili.is_cn());
         assert!(!Source::YouTube.is_cn());
         assert!(!Source::Twitter.is_cn());
+    }
+
+    #[test]
+    fn expires_at_is_hidden_when_unknown() {
+        // 读不出过期时刻（图集、HLS）就整个字段不出现，前端不用判 0
+        let json = serde_json::to_string(&VideoInfo::default()).unwrap();
+        assert!(!json.contains("expires_at"), "不该出现该字段: {json}");
+        let info = VideoInfo {
+            expires_at: 1_700_000_000,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains(r#""expires_at":1700000000"#), "{json}");
     }
 }

@@ -17,9 +17,17 @@ doc = false
 
 [dependencies]
 alcedo = { path = "../alcedo" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "process", "fs", "io-util"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = { workspace = true }
+futures-util = { workspace = true, features = ["std"] }
+# download / serve /media 都要自己拉媒体流：连接池、读超时、不跟跳转的
+# 客户端在这里，与解析库的连接池分开（大流量长流，策略完全不同）
+reqwest = { workspace = true, features = ["rustls-no-provider", "http2", "stream"] }
+# /media 的链接签名（HMAC-SHA256，对应 Python 侧 net.sign 的玩法）
+hmac = "0.12"
+sha2 = "0.10"
 # serve 模式。hyper / tower 已经被 reqwest 带进来了，axum 只多几个小 crate；
 # 关掉默认 feature，不要 HTTP/2 服务端、表单、multipart 这些用不上的东西。
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "json"] }

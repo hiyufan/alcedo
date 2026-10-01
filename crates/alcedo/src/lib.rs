@@ -296,6 +296,8 @@ impl Client {
                 info.set_header("Referer", r);
             }
         }
+        // 直链的过期时刻一并交给上层：播前可以自查，快到期就重新解析
+        info.expires_at = cache::earliest_expiry(info).unwrap_or(0);
         if info.is_empty() {
             return Err(Error::empty());
         }

@@ -172,7 +172,9 @@ static CLIENTS: RwLock<Vec<(String, Client)>> = RwLock::new(Vec::new());
 ///
 /// 用 `rustls-no-provider` 就必须自己选一个 provider，否则第一次 TLS 握手会 panic。
 /// 选 ring 是为了不把 aws-lc-rs 的 C 工具链要求（NASM / CMake）带进构建。
-fn ensure_crypto_provider() {
+/// 幂等：装过（包括宿主程序自己装的）就不动。下游自己另建
+/// `reqwest::Client`（下载媒体之类）时也应该先调它一次。
+pub fn ensure_crypto_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         // 已经被宿主程序装过就不用管，`install_default` 返回 Err 即是这种情况

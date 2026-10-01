@@ -3,6 +3,7 @@
 //! ```text
 //! alcedo <链接或分享文案>          # 人类可读摘要
 //! alcedo --json <链接>             # 机器可读 JSON
+//! alcedo download <链接>           # 下载到本地（视频 / 图集 / 音乐）
 //! alcedo --list                    # 支持的平台
 //! alcedo serve                     # 常驻 HTTP 服务（见 serve 模块）
 //! ```
@@ -13,6 +14,8 @@ use std::process::ExitCode;
 
 use alcedo::{Client, Source, VideoInfo};
 
+mod download;
+mod media;
 mod serve;
 
 fn main() -> ExitCode {
@@ -42,6 +45,26 @@ async fn run() -> ExitCode {
         };
         return match result {
             Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if args.first().map(String::as_str) == Some("download") {
+        let rest = &args[1..];
+        if rest.iter().any(|a| a == "-h" || a == "--help") {
+            print_download_help();
+            return ExitCode::SUCCESS;
+        }
+        return match download::parse_args(rest) {
+            Ok(o) => match download::run(o).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            },
             Err(e) => {
                 eprintln!("{e}");
                 ExitCode::FAILURE
@@ -182,11 +205,13 @@ fn print_help() {
 用法:
   alcedo <链接或分享文案>     解析并打印摘要
   alcedo --json <链接>        输出 JSON
+  alcedo download <链接>      下载到本地（视频 / 图集 / 音乐, --help 看选档）
   alcedo --list               列出支持的平台
   alcedo --version            版本号
   alcedo serve [--listen 地址] [--prewarm 平台,...]
                               常驻 HTTP 服务, 默认听 127.0.0.1:7878
                               GET /parse?url=<链接>  GET /health
+                              GET /media?<签名地址>  浏览器能直接播的媒体代理
                               配了 ALCEDO_RELAY_CN 时自动每 60 秒给中继发
                               保温探针（边缘函数直接 400, 不对平台产生请求）
 
@@ -204,7 +229,31 @@ fn print_help() {
 serve 模式:
   ALCEDO_LISTEN               监听地址, 同 --listen
   ALCEDO_PREWARM              预热并保温的平台, 同 --prewarm (默认 douyin,bilibili,redbook; none 关闭)
-  ALCEDO_SERVE_TOKEN          设了就要求请求带 Authorization: Bearer <令牌>",
+  ALCEDO_SERVE_TOKEN          设了就要求请求带 Authorization: Bearer <令牌>
+  ALCEDO_MEDIA_SECRET         /media 签名密钥, 缺省进程内随机 (重启后旧签名失效)",
+        ver = env!("CARGO_PKG_VERSION")
+    );
+}
+
+fn print_download_help() {
+    println!(
+        "alcedo download {ver} —— 下载到本地
+
+用法:
+  alcedo download <链接或分享文案> [选项]
+
+选项:
+  --dir 目录     保存目录 (默认当前目录; 图集会在里面建同名子目录)
+  --format 档位  下载指定清晰度, 档位名用 --list 看
+  --best         下载最高清晰度 (音视频分离的档位需要 PATH 里有 ffmpeg)
+  --music        只下载背景音乐
+  --list         只列出档位, 不下载
+  --version      版本号
+
+示例:
+  alcedo download \"https://v.douyin.com/xxx/\"          默认档
+  alcedo download <链接> --best --dir ~/Videos         最高清晰度
+  alcedo download <链接> --list                        看有哪些档位",
         ver = env!("CARGO_PKG_VERSION")
     );
 }

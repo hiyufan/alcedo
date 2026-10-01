@@ -141,7 +141,8 @@ async fn bvid_from_url(http: &Http, url: &str) -> Result<String> {
     }
     // /video/av170001 这种老地址
     if let Some(av) = parsed.path_segments().and_then(|mut s| {
-        s.find(|p| p.starts_with("av") && p[2..].bytes().all(|b| b.is_ascii_digit()))
+        // len > 2：裸 "av" 段（p[2..] 为空、all() 对空迭代器返回 true）不该被当成 ID
+        s.find(|p| p.len() > 2 && p.starts_with("av") && p[2..].bytes().all(|b| b.is_ascii_digit()))
     }) {
         return Ok(av.to_owned());
     }
@@ -512,6 +513,10 @@ mod tests {
             "av170001"
         );
         assert!(bvid_from_url(&http, "https://www.bilibili.com/read/cv123")
+            .await
+            .is_err());
+        // 裸 "av" 段不是 ID（空串对 all() 返回 true 的老坑），该报"没有 BV 号"
+        assert!(bvid_from_url(&http, "https://www.bilibili.com/video/av")
             .await
             .is_err());
     }

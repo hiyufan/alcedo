@@ -241,7 +241,8 @@ async fn ssr_fallback(http: &Http, video_id: &str) -> Result<Value> {
 }
 
 fn build(data: &Value) -> Result<VideoInfo> {
-    let video = util::get(data, &["video"]).cloned().unwrap_or(Value::Null);
+    // 子树都活到函数结束，借用就够，别 .cloned() 深拷贝
+    let video = util::get_or_null(data, &["video"]);
 
     // ---- 图集 ----
     let mut images = Vec::new();
@@ -264,25 +265,24 @@ fn build(data: &Value) -> Result<VideoInfo> {
 
     // ---- 视频 ----
     // 默认档用 H.264（浏览器能直接播），其余清晰度进 formats
-    let primary = util::get(&video, &["play_addr_h264"])
-        .or_else(|| util::get(&video, &["play_addr"]))
-        .cloned()
-        .unwrap_or(Value::Null);
+    let primary = util::get(video, &["play_addr_h264"])
+        .or_else(|| util::get(video, &["play_addr"]))
+        .unwrap_or(&util::NULL);
 
     let mut video_url = String::new();
     let mut width = 0;
     let mut height = 0;
-    if let Some(first) = util::arr_at(&primary, &["url_list"])
+    if let Some(first) = util::arr_at(primary, &["url_list"])
         .first()
         .and_then(Value::as_str)
     {
         video_url = first.replace("playwm", "play");
-        width = util::u32_at(&primary, &["width"]);
-        height = util::u32_at(&primary, &["height"]);
+        width = util::u32_at(primary, &["width"]);
+        height = util::u32_at(primary, &["height"]);
     }
 
-    let duration = util::num_at(&video, &["duration"]) / 1000.0;
-    let mut formats = collect_formats(&video, &primary);
+    let duration = util::num_at(video, &["duration"]) / 1000.0;
+    let mut formats = collect_formats(video, primary);
 
     // 有图集就没有视频，这时候上面那个地址是打不开的，置空
 
@@ -290,21 +290,19 @@ fn build(data: &Value) -> Result<VideoInfo> {
         video_url.clear();
         formats.clear();
         // 图集的音频在 video.play_addr.uri 里
-        util::str_at(&primary, &["uri"])
+        util::str_at(primary, &["uri"])
     } else {
-        let music = util::get(data, &["music", "play_url"])
-            .cloned()
-            .unwrap_or(Value::Null);
-        util::arr_at(&music, &["url_list"])
+        let music = util::get_or_null(data, &["music", "play_url"]);
+        util::arr_at(music, &["url_list"])
             .first()
             .and_then(Value::as_str)
-            .map_or_else(|| util::str_at(&music, &["uri"]), str::to_owned)
+            .map_or_else(|| util::str_at(music, &["uri"]), str::to_owned)
     };
 
-    let cover_url = util::prefer_non_webp(util::arr_at(&video, &["cover", "url_list"]));
+    let cover_url = util::prefer_non_webp(util::arr_at(video, &["cover", "url_list"]));
 
-    let author = util::get(data, &["author"]).cloned().unwrap_or(Value::Null);
-    let avatar = util::arr_at(&author, &["avatar_thumb", "url_list"])
+    let author = util::get_or_null(data, &["author"]);
+    let avatar = util::arr_at(author, &["avatar_thumb", "url_list"])
         .first()
         .and_then(Value::as_str)
         .unwrap_or_default();
@@ -316,8 +314,8 @@ fn build(data: &Value) -> Result<VideoInfo> {
         music_url,
         images,
         author: Author::new(
-            util::str_at(&author, &["sec_uid"]),
-            util::str_at(&author, &["nickname"]),
+            util::str_at(author, &["sec_uid"]),
+            util::str_at(author, &["nickname"]),
             avatar,
         ),
         duration,
@@ -350,21 +348,19 @@ fn collect_formats(video: &Value, primary: &Value) -> Vec<Format> {
     let mut best: Vec<(u32, String, Format)> = Vec::new();
 
     for br in util::arr_at(video, &["bit_rate"]) {
-        let pa = util::get(br, &["play_addr"])
-            .cloned()
-            .unwrap_or(Value::Null);
-        let Some(url) = util::arr_at(&pa, &["url_list"])
+        let pa = util::get_or_null(br, &["play_addr"]);
+        let Some(url) = util::arr_at(pa, &["url_list"])
             .first()
             .and_then(Value::as_str)
         else {
             continue;
         };
-        if !primary_key.is_empty() && util::str_at(&pa, &["url_key"]) == primary_key {
+        if !primary_key.is_empty() && util::str_at(pa, &["url_key"]) == primary_key {
             continue;
         }
 
-        let w = util::u32_at(&pa, &["width"]);
-        let h = util::u32_at(&pa, &["height"]);
+        let w = util::u32_at(pa, &["width"]);
+        let h = util::u32_at(pa, &["height"]);
         // 竖屏视频 height 才是长边，统一用短边当"清晰度"
         let short = short_side(w, h);
         let codec = if util::get(br, &["is_h265"])
@@ -376,7 +372,7 @@ fn collect_formats(video: &Value, primary: &Value) -> Vec<Format> {
         } else {
             ""
         };
-        let size = util::u64_at(&pa, &["data_size"]);
+        let size = util::u64_at(pa, &["data_size"]);
 
         if let Some(slot) = best.iter_mut().find(|(s, c, _)| *s == short && c == codec) {
             if slot.2.filesize >= size {

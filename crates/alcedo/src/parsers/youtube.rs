@@ -158,18 +158,16 @@ async fn player(http: &Http, client: &ClientSpec, video_id: &str) -> Result<Valu
 fn build(resp: &Value, video_id: &str) -> Result<VideoInfo> {
     check_playability(resp)?;
 
-    let details = util::get(resp, &["videoDetails"])
-        .cloned()
-        .unwrap_or_default();
-    let streaming = util::get(resp, &["streamingData"])
-        .cloned()
-        .unwrap_or_default();
+    // 这两块是 InnerTube 响应里最大的子树，活到函数结束，借用就够，
+    // 别 .cloned() 深拷贝
+    let details = util::get_or_null(resp, &["videoDetails"]);
+    let streaming = util::get_or_null(resp, &["streamingData"]);
 
     // 直播：只有 HLS，没有可下载的分段
-    let hls = util::str_at(&streaming, &["hlsManifestUrl"]);
+    let hls = util::str_at(streaming, &["hlsManifestUrl"]);
 
     // progressive：音视频合一，浏览器能直接播。YouTube 现在只给到 360p/720p。
-    let progressive: Vec<&Value> = util::arr_at(&streaming, &["formats"])
+    let progressive: Vec<&Value> = util::arr_at(streaming, &["formats"])
         .iter()
         .filter(|f| has_plain_url(f))
         .collect();
@@ -181,20 +179,20 @@ fn build(resp: &Value, video_id: &str) -> Result<VideoInfo> {
 
     let mut info = VideoInfo {
         video_url: best_progressive.map_or_else(|| hls.clone(), |f| util::str_at(f, &["url"])),
-        cover_url: best_thumbnail(&details, video_id),
-        title: util::str_at(&details, &["title"]),
-        duration: util::num_at(&details, &["lengthSeconds"]),
+        cover_url: best_thumbnail(details, video_id),
+        title: util::str_at(details, &["title"]),
+        duration: util::num_at(details, &["lengthSeconds"]),
         width: best_progressive.map_or(0, |f| util::u32_at(f, &["width"])),
         height: best_progressive.map_or(0, |f| util::u32_at(f, &["height"])),
         author: Author::new(
-            util::str_at(&details, &["channelId"]),
-            util::str_at(&details, &["author"]),
+            util::str_at(details, &["channelId"]),
+            util::str_at(details, &["author"]),
             String::new(),
         ),
         ..Default::default()
     };
 
-    info.formats = collect_formats(&streaming, &progressive);
+    info.formats = collect_formats(streaming, &progressive);
 
     if info.is_empty() {
         // 走到这儿说明这个客户端被要求 PO Token 了：换下一个客户端还有戏

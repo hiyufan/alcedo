@@ -57,10 +57,9 @@ fn build(post: &Value) -> VideoInfo {
                 &["crosspost_parent_list", "0", "secure_media", "reddit_video"],
             )
         })
-        .cloned()
-        .unwrap_or_default();
+        .unwrap_or(&util::NULL);
 
-    let mut video_url = util::str_at(&media, &["fallback_url"]);
+    let mut video_url = util::str_at(media, &["fallback_url"]);
     // fallback_url 带 ?source=fallback，去掉更干净
     if let Some(i) = video_url.find('?') {
         video_url.truncate(i);
@@ -72,10 +71,10 @@ fn build(post: &Value) -> VideoInfo {
         let audio_url = audio_track(&video_url);
         if !audio_url.is_empty() {
             formats.push(Format {
-                label: format!("{}p（含音轨）", util::u32_at(&media, &["height"])),
+                label: format!("{}p（含音轨）", util::u32_at(media, &["height"])),
                 url: String::new(),
                 ext: "mp4".into(),
-                height: util::u32_at(&media, &["height"]),
+                height: util::u32_at(media, &["height"]),
                 filesize: 0,
                 codec: String::new(),
                 video_url: video_url.clone(),
@@ -121,9 +120,9 @@ fn build(post: &Value) -> VideoInfo {
         )),
         title: util::str_at(post, &["title"]),
         images,
-        duration: util::num_at(&media, &["duration"]),
-        width: util::u32_at(&media, &["width"]),
-        height: util::u32_at(&media, &["height"]),
+        duration: util::num_at(media, &["duration"]),
+        width: util::u32_at(media, &["width"]),
+        height: util::u32_at(media, &["height"]),
         formats,
         author: Author::named(util::str_at(post, &["author"])),
         ..Default::default()

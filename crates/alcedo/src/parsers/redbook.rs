@@ -147,7 +147,7 @@ fn build(data: &Value, image_url_key: &str, nick_key: &str) -> VideoInfo {
                 }
             };
             let mut img = Image::new(if key.is_empty() {
-                page_img.clone()
+                page_img // move 进去，别 clone
             } else {
                 ORIGINAL_IMAGE.replace("{key}", &key)
             });
@@ -173,7 +173,7 @@ fn build(data: &Value, image_url_key: &str, nick_key: &str) -> VideoInfo {
         .map(|i| util::first_str(i, &[&[image_url_key], &["urlDefault"], &["url"]]))
         .unwrap_or_default();
 
-    let user = util::get(data, &["user"]).cloned().unwrap_or_default();
+    let user = util::get_or_null(data, &["user"]);
     let title = {
         let t = util::str_at(data, &["title"]);
         if t.is_empty() {
@@ -193,9 +193,9 @@ fn build(data: &Value, image_url_key: &str, nick_key: &str) -> VideoInfo {
         height,
         formats,
         author: Author::new(
-            util::id_at(&user, &["userId"]),
-            util::first_str(&user, &[&[nick_key], &["nickname"], &["nickName"]]),
-            util::str_at(&user, &["avatar"]),
+            util::id_at(user, &["userId"]),
+            util::first_str(user, &[&[nick_key], &["nickname"], &["nickName"]]),
+            util::str_at(user, &["avatar"]),
         ),
         ..Default::default()
     }
@@ -216,11 +216,10 @@ struct Video {
 /// h264 里分辨率（再按码率）最高的那条当默认——浏览器能直接播；其余档位和
 /// 一条 h265 进 formats。h265 体积小很多但兼容性差，所以只给一档、不当默认。
 fn video_part(data: &Value) -> Video {
-    let stream = util::get(data, &["video", "media", "stream"])
-        .cloned()
-        .unwrap_or_default();
+    // stream 含 h264/h265 全部档位，活到函数结束，借用就够
+    let stream = util::get_or_null(data, &["video", "media", "stream"]);
 
-    let mut h264: Vec<&Value> = util::arr_at(&stream, &["h264"])
+    let mut h264: Vec<&Value> = util::arr_at(stream, &["h264"])
         .iter()
         .filter(|s| !util::str_at(s, &["masterUrl"]).is_empty())
         .collect();
@@ -248,7 +247,7 @@ fn video_part(data: &Value) -> Video {
         seen.push(key);
         formats.push(stream_format(s, ""));
     }
-    if let Some(s) = util::arr_at(&stream, &["h265"])
+    if let Some(s) = util::arr_at(stream, &["h265"])
         .iter()
         .find(|s| !util::str_at(s, &["masterUrl"]).is_empty())
     {

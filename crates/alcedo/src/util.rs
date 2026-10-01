@@ -200,6 +200,17 @@ pub fn get<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     Some(cur)
 }
 
+/// [`get`] 取不到字段时借这个当返回值。static 不参与 Drop，进程生命期内常驻。
+pub(crate) static NULL: Value = Value::Null;
+
+/// [`get`] 的兜底形态：取不到就当 Null。
+///
+/// 解析器里"取个子树出来只读"都该用它，而不是 `.cloned()`——那会把几 KB 的
+/// 子树整个深拷贝一份，而数据本来活到函数结束，借用就够。
+pub fn get_or_null<'a>(value: &'a Value, path: &[&str]) -> &'a Value {
+    get(value, path).unwrap_or(&NULL)
+}
+
 /// 取字符串；不是字符串或不存在都返回空串。
 pub fn str_at(value: &Value, path: &[&str]) -> String {
     get(value, path)
@@ -412,6 +423,14 @@ mod tests {
         assert_eq!(str_at(&v, &["data", "missing", "0"]), "");
         assert_eq!(num_at(&v, &["n"]), 42.0); // 字符串数字也认
         assert_eq!(arr_at(&v, &["data", "list"]).len(), 1);
+    }
+
+    #[test]
+    fn get_or_null_borrows_instead_of_cloning() {
+        let v = json!({"a": {"b": 1}});
+        assert_eq!(get_or_null(&v, &["a"])["b"], json!(1));
+        assert!(get_or_null(&v, &["nope"]).is_null());
+        assert_eq!(get_or_null(&v, &[]), &v); // 空路径就是根本身
     }
 
     #[test]

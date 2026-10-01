@@ -60,10 +60,8 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
         });
     };
 
-    let play = util::get(data, &["video", "play_addr"])
-        .cloned()
-        .unwrap_or_default();
-    let video_url = util::str_at(&play, &["url_list", "0"]).replace("playwm", "play");
+    let play = util::get_or_null(data, &["video", "play_addr"]);
+    let video_url = util::str_at(play, &["url_list", "0"]).replace("playwm", "play");
     if video_url.is_empty() {
         return Err(Error::parse("没有取到播放地址"));
     }
@@ -73,8 +71,8 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
         cover_url: util::prefer_non_webp(util::arr_at(data, &["video", "cover", "url_list"])),
         title: util::str_at(data, &["desc"]),
         duration: util::num_at(data, &["video", "duration"]) / 1000.0,
-        width: util::u32_at(&play, &["width"]),
-        height: util::u32_at(&play, &["height"]),
+        width: util::u32_at(play, &["width"]),
+        height: util::u32_at(play, &["height"]),
         author: Author::new(
             util::first_str(data, &[&["author", "unique_id"], &["author", "sec_uid"]]),
             util::str_at(data, &["author", "nickname"]),

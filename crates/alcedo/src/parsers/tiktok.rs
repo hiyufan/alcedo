@@ -80,8 +80,9 @@ async fn from_page(http: &Http, page_url: &str) -> Result<VideoInfo> {
 }
 
 fn build(item: &Value) -> VideoInfo {
-    let video = util::get(item, &["video"]).cloned().unwrap_or_default();
-    let author = util::get(item, &["author"]).cloned().unwrap_or_default();
+    // bitrateInfo 是整棵码率梯子，借用就够，别 .cloned()
+    let video = util::get_or_null(item, &["video"]);
+    let author = util::get_or_null(item, &["author"]);
 
     // 图文帖
     let images: Vec<Image> = util::arr_at(item, &["imagePost", "images"])
@@ -97,7 +98,7 @@ fn build(item: &Value) -> VideoInfo {
 
     // 视频：playAddr 是无水印的；downloadAddr 有的作品带水印，只当退路
     let video_url = if images.is_empty() {
-        util::first_str(&video, &[&["playAddr"], &["downloadAddr"]])
+        util::first_str(video, &[&["playAddr"], &["downloadAddr"]])
     } else {
         String::new()
     };
@@ -105,7 +106,7 @@ fn build(item: &Value) -> VideoInfo {
     // 各档码率
     let mut formats = Vec::new();
     if images.is_empty() {
-        for b in util::arr_at(&video, &["bitrateInfo"]) {
+        for b in util::arr_at(video, &["bitrateInfo"]) {
             let u = util::arr_at(b, &["PlayAddr", "UrlList"])
                 .first()
                 .and_then(Value::as_str)
@@ -139,19 +140,19 @@ fn build(item: &Value) -> VideoInfo {
 
     VideoInfo {
         video_url,
-        cover_url: util::first_str(&video, &[&["cover"], &["originCover"], &["dynamicCover"]]),
+        cover_url: util::first_str(video, &[&["cover"], &["originCover"], &["dynamicCover"]]),
         title: util::first_str(item, &[&["desc"], &["contents", "0", "desc"]]),
         music_url: util::str_at(item, &["music", "playUrl"]),
         images,
-        duration: util::num_at(&video, &["duration"]),
-        width: util::u32_at(&video, &["width"]),
-        height: util::u32_at(&video, &["height"]),
+        duration: util::num_at(video, &["duration"]),
+        width: util::u32_at(video, &["width"]),
+        height: util::u32_at(video, &["height"]),
         formats,
         author: Author::new(
-            util::first_id(&author, &[&["id"], &["uniqueId"]]),
-            util::first_str(&author, &[&["nickname"], &["uniqueId"]]),
+            util::first_id(author, &[&["id"], &["uniqueId"]]),
+            util::first_str(author, &[&["nickname"], &["uniqueId"]]),
             util::first_str(
-                &author,
+                author,
                 &[&["avatarLarger"], &["avatarMedium"], &["avatarThumb"]],
             ),
         ),
@@ -172,7 +173,9 @@ fn status_error(status: i64) -> Error {
 
 fn block_error(html: &str) -> Error {
     let title = util::html_title(html);
-    let head = &html[..html.len().min(20_000)];
+    // 按 .get 切：字节 20000 可能落在多字节字符（CJK / emoji）中间，
+    // 直接下标切片会 panic
+    let head = html.get(..html.len().min(20_000)).unwrap_or(html);
     if head.contains("captcha") || head.contains("verify") || title.contains("Verify") {
         return Error::blocked("TikTok 对服务器所在网络弹了验证，换个出口或配置代理");
     }
@@ -289,5 +292,14 @@ mod tests {
             parse_id(&http, "abc").await.unwrap_err().reason,
             crate::Reason::Unsupported
         );
+    }
+
+    #[test]
+    fn head_truncation_lands_on_char_boundaries() {
+        // 字节 20000 正好落在多字节字符中间：裸下标切片在这里 panic，
+        // 页面 JSON 里的 CJK / emoji 密集，这不是边角
+        let html = format!("{}{}", "x".repeat(19_999), "抖".repeat(50));
+        assert!(html.len() > 20_000);
+        assert_eq!(block_error(&html).reason, crate::Reason::Parse);
     }
 }

@@ -82,7 +82,7 @@ fn has_media(json: &Value) -> bool {
 }
 
 fn build_syndication(json: &Value) -> VideoInfo {
-    let user = util::get(json, &["user"]).cloned().unwrap_or_default();
+    let user = util::get_or_null(json, &["user"]);
 
     let media = util::arr_at(json, &["mediaDetails"]);
     let mut video_url = String::new();
@@ -131,9 +131,9 @@ fn build_syndication(json: &Value) -> VideoInfo {
     }
 
     let name = {
-        let n = util::str_at(&user, &["name"]);
+        let n = util::str_at(user, &["name"]);
         if n.is_empty() {
-            util::str_at(&user, &["screen_name"])
+            util::str_at(user, &["screen_name"])
         } else {
             n
         }
@@ -148,9 +148,9 @@ fn build_syndication(json: &Value) -> VideoInfo {
         width,
         height,
         author: Author::new(
-            util::first_id(&user, &[&["id_str"], &["id"]]),
+            util::first_id(user, &[&["id_str"], &["id"]]),
             name,
-            util::str_at(&user, &["profile_image_url_https"]),
+            util::str_at(user, &["profile_image_url_https"]),
         ),
         ..Default::default()
     }
@@ -219,7 +219,7 @@ async fn fetch_fxtwitter(http: &Http, tweet_id: &str) -> Option<VideoInfo> {
         return None;
     }
 
-    let author = util::get(tweet, &["author"]).cloned().unwrap_or_default();
+    let author = util::get_or_null(tweet, &["author"]);
     Some(VideoInfo {
         video_url,
         cover_url,
@@ -229,9 +229,9 @@ async fn fetch_fxtwitter(http: &Http, tweet_id: &str) -> Option<VideoInfo> {
         width,
         height,
         author: Author::new(
-            util::first_id(&author, &[&["id"]]),
-            util::first_str(&author, &[&["name"], &["screen_name"]]),
-            util::str_at(&author, &["avatar_url"]),
+            util::first_id(author, &[&["id"]]),
+            util::first_str(author, &[&["name"], &["screen_name"]]),
+            util::str_at(author, &["avatar_url"]),
         ),
         ..Default::default()
     })

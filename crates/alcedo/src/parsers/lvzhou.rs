@@ -1,10 +1,22 @@
 //! 绿洲（微博旗下）。整页都是服务端渲染，直接读 DOM。
 
+use std::sync::LazyLock;
+
 use scraper::{Html, Selector};
 
 use crate::error::{Error, Result};
 use crate::http::Http;
 use crate::model::{Author, VideoInfo};
+
+// 选择器都是编译期字面量，写错了测试立刻会挂。scraper 不缓存选择器，
+// 每次请求重新 parse 一遍是纯浪费，提成 static。
+static VIDEO: LazyLock<Selector> = LazyLock::new(|| Selector::parse("video").unwrap());
+static VIDEO_COVER: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("div.video-cover").unwrap());
+static STATUS_TITLE: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("div.status-title").unwrap());
+static NICKNAME: LazyLock<Selector> = LazyLock::new(|| Selector::parse("div.nickname").unwrap());
+static AVATAR_IMG: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a.avatar img").unwrap());
 
 /// 解析一条绿洲分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
@@ -15,32 +27,30 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
 fn build(html: &str) -> Result<VideoInfo> {
     let doc = Html::parse_document(html);
 
-    let attr = |css: &str, name: &str| -> String {
-        Selector::parse(css)
-            .ok()
-            .and_then(|s| doc.select(&s).next())
+    let attr = |sel: &Selector, name: &str| -> String {
+        doc.select(sel)
+            .next()
             .and_then(|el| el.value().attr(name).map(str::to_owned))
             .unwrap_or_default()
     };
-    let text = |css: &str| -> String {
-        Selector::parse(css)
-            .ok()
-            .and_then(|s| doc.select(&s).next())
+    let text = |sel: &Selector| -> String {
+        doc.select(sel)
+            .next()
             .map(|el| el.text().collect::<String>().trim().to_owned())
             .unwrap_or_default()
     };
 
-    let video_url = attr("video", "src");
+    let video_url = attr(&VIDEO, "src");
     // 封面藏在内联样式的 background-image 里
-    let cover_url = cover_from_style(&attr("div.video-cover", "style"));
+    let cover_url = cover_from_style(&attr(&VIDEO_COVER, "style"));
 
     let info = VideoInfo {
         video_url,
         cover_url,
-        title: text("div.status-title"),
+        title: text(&STATUS_TITLE),
         author: Author {
-            name: text("div.nickname"),
-            avatar: attr("a.avatar img", "src"),
+            name: text(&NICKNAME),
+            avatar: attr(&AVATAR_IMG, "src"),
             ..Default::default()
         },
         ..Default::default()

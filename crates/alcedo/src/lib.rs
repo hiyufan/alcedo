@@ -15,6 +15,8 @@
 //! - **连接复用**：进程内按代理配置共享 [`reqwest::Client`]，一次解析里的多个
 //!   请求共用连接，不会各自重新握手。
 //! - **静态分发**：平台识别后走 `match`，没有 trait object，解析路径上零虚调用。
+//! - **同 key 去重**：并发解析同一条链接时只放一个真正出去（single-flight），
+//!   其余等它的结果——热门内容的并发不会穿透缓存把上游打一遍。
 //! - **逐跳 SSRF**：短链跳转的每一跳都过一遍内网地址检查，拦在 DNS 层，没有
 //!   检查与连接之间的时间差。
 //! - **结构化错误**：失败都带 [`Reason`]，前端能直接说人话。
@@ -22,6 +24,7 @@
 pub mod cache;
 pub mod error;
 pub mod http;
+mod inflight;
 pub mod model;
 pub mod parsers;
 pub mod registry;
@@ -56,6 +59,10 @@ static CACHE: std::sync::LazyLock<cache::Cache> = std::sync::LazyLock::new(|| {
 pub fn result_cache() -> &'static cache::Cache {
     &CACHE
 }
+
+/// 同 key 去重表。和缓存一样进程内共享：分散到每个 [`Client`] 就去不了重。
+static FLIGHT: std::sync::LazyLock<inflight::Flight<Result<VideoInfo>>> =
+    std::sync::LazyLock::new(inflight::Flight::new);
 pub use model::{Author, Format, Image, Source, VideoInfo};
 
 /// 解析入口。构造一次，全程复用——它持有连接池。
@@ -148,18 +155,7 @@ impl Client {
 
         // 缓存键用规范化后的地址：同一条内容的不同写法应当命中同一条
         let key = cache_key(source, &url);
-        if let Some(hit) = CACHE.get(&key) {
-            return Ok(hit);
-        }
-
-        self.pass_gate(source).await?;
-        let http = http::Http::new(Arc::clone(&self.cfg), Some(source))?;
-        let outcome = self
-            .with_timeout(parsers::dispatch(&http, source, &url))
-            .await;
-        let done = self.settle(source, &url, outcome)?;
-        CACHE.put(&key, &done);
-        Ok(done)
+        self.execute(source, key, Target::Url(&url)).await
     }
 
     /// 已经知道平台和作品 ID 时直接解析。
@@ -168,17 +164,41 @@ impl Client {
             return Err(Error::unsupported("作品 ID 为空"));
         }
         let key = cache_key(source, id);
+        self.execute(source, key, Target::Id(id)).await
+    }
+
+    /// 缓存查询 + 同 key 去重 + 真正执行。`parse` / `parse_id` 共用这条管线。
+    ///
+    /// 等待与重新排队的循环在 [`inflight::Flight::claim`] 内部：它要么带来
+    /// 领队的现成结果（成功或失败），要么把执行权交出来，不会空转回来。
+    async fn execute(&self, source: Source, key: String, target: Target<'_>) -> Result<VideoInfo> {
         if let Some(hit) = CACHE.get(&key) {
             return Ok(hit);
         }
+        match FLIGHT.claim(&key).await {
+            inflight::Claim::Wait(done) => done,
+            inflight::Claim::Lead(guard) => {
+                // 只有领队真正出门打请求：等待者不占限流配额，也不过闸门
+                let done = self.run(source, &key, target).await;
+                guard.finish(done.clone());
+                done
+            }
+        }
+    }
 
+    /// 领队的实际解析：过闸门、发请求、收尾、进缓存。
+    async fn run(&self, source: Source, key: &str, target: Target<'_>) -> Result<VideoInfo> {
         self.pass_gate(source).await?;
         let http = http::Http::new(Arc::clone(&self.cfg), Some(source))?;
-        let outcome = self
-            .with_timeout(parsers::dispatch_id(&http, source, id))
-            .await;
-        let done = self.settle(source, id, outcome)?;
-        CACHE.put(&key, &done);
+        let outcome = match target {
+            Target::Url(u) => self.with_timeout(parsers::dispatch(&http, source, u)).await,
+            Target::Id(i) => {
+                self.with_timeout(parsers::dispatch_id(&http, source, i))
+                    .await
+            }
+        };
+        let done = self.settle(source, target.as_str(), outcome)?;
+        CACHE.put(key, &done);
         Ok(done)
     }
 
@@ -250,14 +270,63 @@ impl Client {
     }
 }
 
+/// 这次解析的目标。`parse` 给完整链接，`parse_id` 给已知平台的作品 ID。
+#[derive(Debug, Clone, Copy)]
+enum Target<'a> {
+    Url(&'a str),
+    Id(&'a str),
+}
+
+impl<'a> Target<'a> {
+    /// 收尾时补 `page_url` 用的原始地址。
+    const fn as_str(self) -> &'a str {
+        match self {
+            Target::Url(s) | Target::Id(s) => s,
+        }
+    }
+}
+
+/// 各平台装着作品 ID 的 query 参数。剥跟踪参数时它们**不能**剥：
+/// 剥了的话 `watch?v=A` 和 `watch?v=B` 折叠成同一个键，缓存会把 A 的结果
+/// 错发给 B。不在表里的参数一律当跟踪参数剥掉。
+static ID_QUERY_PARAMS: &[(Source, &str)] = &[
+    (Source::YouTube, "v"),
+    (Source::LvZhou, "sid"),
+    (Source::WeiBo, "fid"),
+    (Source::QQVideo, "vid"),
+    (Source::QuanMin, "vid"),
+    (Source::HaoKan, "vid"),
+    (Source::SixRoom, "vid"),
+    (Source::WeiShi, "id"),
+    (Source::DouPai, "id"),
+    (Source::ZuiYou, "pid"),
+    (Source::QuanMinKGe, "s"),
+];
+
+/// 这个平台的 query 里有没有装作品 ID 的这个参数。
+fn is_id_param(source: Source, key: &str) -> bool {
+    ID_QUERY_PARAMS
+        .iter()
+        .any(|(s, k)| *s == source && *k == key)
+}
+
 /// 缓存键。带上平台是因为不同平台的 ID 命名空间是独立的。
 fn cache_key(source: Source, target: &str) -> String {
-    // 去掉 query 里的跟踪参数，让同一条内容的不同分享写法命中同一条缓存
+    // 去掉 query 里的跟踪参数，让同一条内容的不同分享写法命中同一条缓存；
+    // 装 ID 的参数要保留（见 ID_QUERY_PARAMS）
     let cleaned = url::Url::parse(target).map_or_else(
         |_| target.to_owned(),
         |mut u| {
+            let kept: Vec<(String, String)> = u
+                .query_pairs()
+                .filter(|(k, _)| is_id_param(source, k.as_ref()))
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
             u.set_query(None);
             u.set_fragment(None);
+            for (k, v) in kept {
+                u.query_pairs_mut().append_pair(&k, &v);
+            }
             u.to_string()
         },
     );
@@ -269,6 +338,28 @@ fn cache_key(source: Source, target: &str) -> String {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_key_keeps_id_params_and_strips_tracking() {
+        // 同一视频的不同写法要命中同一条缓存
+        let a = cache_key(
+            Source::YouTube,
+            "https://www.youtube.com/watch?v=abc&feature=share",
+        );
+        let b = cache_key(Source::YouTube, "https://www.youtube.com/watch?v=abc&t=30");
+        assert_eq!(a, b, "同一条视频不该因为跟踪参数而分裂");
+        // 不同视频绝不能折叠成同一个键——剥了 v 就会这样
+        let c = cache_key(Source::YouTube, "https://www.youtube.com/watch?v=def");
+        assert_ne!(a, c, "不同视频共享缓存键会把 A 的结果错发给 B");
+
+        // 纯跟踪参数照旧剥掉
+        let d = cache_key(
+            Source::DouYin,
+            "https://www.douyin.com/video/123?previous_page=app&share=1",
+        );
+        let e = cache_key(Source::DouYin, "https://www.douyin.com/video/123");
+        assert_eq!(d, e);
+    }
 
     #[tokio::test]
     async fn rejects_unknown_site_without_network() {

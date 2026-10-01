@@ -65,12 +65,12 @@ async fn api_info(http: &Http, media_id: &str) -> Result<VideoInfo> {
     resp.error_for_status()?;
     let json = resp.json()?;
 
+    // 轮播帖的 item 可达几十 KB，借用就够，别 .cloned() 深拷贝
     let item = util::arr_at(&json, &["items"])
         .first()
-        .cloned()
         .ok_or_else(|| Error::deleted("Instagram 没有返回作品"))?;
 
-    let info = build(&item);
+    let info = build(item);
     if info.is_empty() {
         return Err(Error::bare(crate::Reason::Empty));
     }
@@ -116,7 +116,7 @@ fn build(item: &Value) -> VideoInfo {
         images.clear();
     }
 
-    let user = util::get(item, &["user"]).cloned().unwrap_or_default();
+    let user = util::get_or_null(item, &["user"]);
     VideoInfo {
         video_url,
         cover_url: best_image(item),
@@ -126,9 +126,9 @@ fn build(item: &Value) -> VideoInfo {
         width,
         height,
         author: Author::new(
-            util::first_id(&user, &[&["pk"], &["id"]]),
-            util::first_str(&user, &[&["username"], &["full_name"]]),
-            util::str_at(&user, &["profile_pic_url"]),
+            util::first_id(user, &[&["pk"], &["id"]]),
+            util::first_str(user, &[&["username"], &["full_name"]]),
+            util::str_at(user, &["profile_pic_url"]),
         ),
         ..Default::default()
     }
@@ -160,7 +160,10 @@ async fn og_fallback(http: &Http, url: &str, platform: &str) -> Result<VideoInfo
                     "User-Agent",
                     "Mozilla/5.0 (compatible; facebookexternalhit/1.1; +http://www.facebook.com/externalhit_uatext.php)",
                 )
-                .header("Accept", "text/html,*/*"),
+                .header("Accept", "text/html,*/*")
+                // 下面的消费全在文档头部（OG 标签、<title>、登录跳转标记），
+                // 整页拖完纯属白等传输
+                .head_bytes(64 * 1024),
         )
         .await?;
     resp.error_for_status()?;

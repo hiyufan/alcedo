@@ -31,6 +31,10 @@ use crate::http::{ua, Http, Req};
 pub(crate) struct IdentitySlot {
     value: RwLock<Option<(String, Instant)>>,
     refreshing: AtomicBool,
+    /// 同步重领的去重。`forget()` 之后一波并发如果各领各的，就是 N 个请求
+    /// 各等 150ms、对平台发 N 次注册，还会放大被风控的概率——只放一个去领，
+    /// 其余等它的结果（领不到也一起放弃，刚失败过就别立刻再戳）。
+    flight: std::sync::LazyLock<crate::inflight::Flight<Option<String>>>,
     ttl: Duration,
 }
 
@@ -39,6 +43,7 @@ impl IdentitySlot {
         Self {
             value: RwLock::new(None),
             refreshing: AtomicBool::new(false),
+            flight: std::sync::LazyLock::new(crate::inflight::Flight::new),
             ttl,
         }
     }
@@ -69,9 +74,29 @@ impl IdentitySlot {
                 return Some(v);
             }
         }
-        let fresh = fetch(http.clone()).await?;
-        self.put(fresh.clone());
-        Some(fresh)
+
+        // 同步重领，走去重：抢到的去领，其余等它的结果
+        match self.flight.claim("sync-refetch").await {
+            crate::inflight::Claim::Wait(v) => v,
+            crate::inflight::Claim::Lead(guard) => {
+                // 排队期间可能别人刚领完。只认新鲜的：手里这份是"过期才走到
+                // 这儿"的旧值，不能拿它冒充新领的身份
+                if let Some((v, at)) = self.value.read().clone() {
+                    if at.elapsed() < self.ttl {
+                        guard.finish(Some(v.clone()));
+                        return Some(v);
+                    }
+                }
+                let fresh = fetch(http.clone()).await;
+                guard.finish(fresh.clone());
+                if let Some(v) = fresh {
+                    self.put(v.clone());
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub(crate) fn put(&self, v: String) {
@@ -190,5 +215,37 @@ mod tests {
             .get_or_fetch(&http(), |_| async { Some("new".to_owned()) })
             .await;
         assert_eq!(got.as_deref(), Some("new"), "被风控后必须能强制换一份身份");
+    }
+
+    #[tokio::test]
+    async fn concurrent_sync_refetch_registers_only_once() {
+        static SLOT: IdentitySlot = IdentitySlot::new(Duration::from_secs(60));
+        SLOT.forget();
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let calls = std::sync::Arc::clone(&calls);
+            handles.push(tokio::spawn(async move {
+                let h = http();
+                SLOT.get_or_fetch(&h, move |_| {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async {
+                        // 拖慢领身份的那一个，让其余并发真正走进等待分支
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        Some("fresh".to_owned())
+                    }
+                })
+                .await
+            }));
+        }
+        for h in handles {
+            assert_eq!(h.await.unwrap().as_deref(), Some("fresh"));
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "并发的同步重领只该发一次注册"
+        );
     }
 }

@@ -38,6 +38,12 @@ impl Bucket {
     }
 
     /// 取一个令牌；不够就返回还要等多久。
+    ///
+    /// 返回等待时长时会**预扣**下那枚还没补回来的令牌：它已经许给了这次调用，
+    /// 同一瞬间到达的下一个并发必须自己排队，而不是拿着同样的等待时长一起
+    /// 放行——不扣的话，限流恰恰在它要保护的突发场景下形同虚设。
+    /// 扣成负数没关系：补充按时间线性进行，负值只会让后面的人等得更久，
+    /// 正是想要的排队语义。
     fn take(&mut self) -> Option<Duration> {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last).as_secs_f64();
@@ -49,6 +55,7 @@ impl Bucket {
             None
         } else {
             let need = (1.0 - self.tokens) / self.refill_per_sec;
+            self.tokens -= 1.0;
             Some(Duration::from_secs_f64(need))
         }
     }
@@ -299,6 +306,20 @@ mod tests {
         assert!(b.take().is_none());
         assert!(b.take().is_none());
         assert!(b.take().is_some(), "第 4 次该被限住");
+    }
+
+    #[test]
+    fn waiters_queue_up_instead_of_going_through_together() {
+        // 预扣的核心：同一瞬间到达的 N 个并发，等待时长要逐个累加，
+        // 而不是拿着同一个时长睡完一起放行
+        let mut b = Bucket::new(1.0, 1.0);
+        assert!(b.take().is_none(), "满桶直接过");
+        let first = b.take().expect("第二个该排队");
+        let second = b.take().expect("第三个该排更久");
+        assert!(
+            second >= first + Duration::from_millis(900),
+            "等待时长该逐个累加（first={first:?}, second={second:?}）"
+        );
     }
 
     #[test]

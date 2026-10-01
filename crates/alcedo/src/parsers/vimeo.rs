@@ -31,7 +31,7 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     }
     let json = resp.json()?;
 
-    let video = util::get(&json, &["video"]).cloned().unwrap_or_default();
+    let video = util::get_or_null(&json, &["video"]);
 
     // progressive 是可直接下载的 mp4，按高度降序
     let mut files: Vec<&serde_json::Value> =
@@ -43,15 +43,15 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let best = files.first().copied();
     let mut info = VideoInfo {
         video_url: best.map(|f| util::str_at(f, &["url"])).unwrap_or_default(),
-        cover_url: best_thumbnail(&video),
-        title: util::str_at(&video, &["title"]),
-        duration: util::num_at(&video, &["duration"]),
-        width: util::u32_at(&video, &["width"]),
-        height: util::u32_at(&video, &["height"]),
+        cover_url: best_thumbnail(video),
+        title: util::str_at(video, &["title"]),
+        duration: util::num_at(video, &["duration"]),
+        width: util::u32_at(video, &["width"]),
+        height: util::u32_at(video, &["height"]),
         author: Author::new(
-            util::first_id(&video, &[&["owner", "id"]]),
-            util::str_at(&video, &["owner", "name"]),
-            util::str_at(&video, &["owner", "img_2x"]),
+            util::first_id(video, &[&["owner", "id"]]),
+            util::str_at(video, &["owner", "name"]),
+            util::str_at(video, &["owner", "img_2x"]),
         ),
         formats: files.iter().skip(1).filter_map(|f| to_format(f)).collect(),
         ..Default::default()

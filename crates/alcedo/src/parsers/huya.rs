@@ -5,16 +5,23 @@ use crate::http::{ua, Http, Req};
 use crate::model::{Author, Format, VideoInfo};
 use crate::util;
 
-/// 解析一条虎牙分享链接。
-pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
-    // https://v.huya.com/play/123456.html
-    let id = url
-        .rsplit('/')
+/// `v.huya.com/play/123456.html` → `123456`。
+///
+/// App 分享出来的链接常带查询串（`?shareFrom=x`），先剥掉再取末段，
+/// 否则 strip_suffix 认不出 `.html`，整条链接直接解析失败。
+fn video_id(url: &str) -> Result<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.rsplit('/')
         .next()
         .and_then(|s| s.strip_suffix(".html"))
-        .filter(|s| s.bytes().all(|b| b.is_ascii_digit()) && !s.is_empty())
-        .ok_or_else(|| Error::unsupported("链接里没有虎牙的视频 ID"))?;
-    parse_id(http, id).await
+        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_owned)
+        .ok_or_else(|| Error::unsupported("链接里没有虎牙的视频 ID"))
+}
+
+/// 解析一条虎牙分享链接。
+pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
+    parse_id(http, &video_id(url)?).await
 }
 
 /// 已知虎牙作品 ID 时直接解析。
@@ -82,16 +89,22 @@ pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn video_id_from_share_url() {
-        let http = Http::new(
-            std::sync::Arc::new(crate::Config::default()),
-            Some(crate::Source::HuYa),
-        )
-        .unwrap();
-        // 只验证取 ID 这一步的分支, 不发请求
-        assert!(parse(&http, "https://v.huya.com/play/notanid")
-            .await
-            .is_err());
+    #[test]
+    fn video_id_survives_query_strings() {
+        // App 分享出来的链接带查询串，不能让 strip_suffix 认不出 .html
+        assert_eq!(
+            video_id("https://v.huya.com/play/123456.html?shareFrom=x").unwrap(),
+            "123456"
+        );
+        assert_eq!(
+            video_id("https://v.huya.com/play/123456.html").unwrap(),
+            "123456"
+        );
+        assert_eq!(
+            video_id("https://v.huya.com/play/123456.html#comment").unwrap(),
+            "123456"
+        );
+        assert!(video_id("https://v.huya.com/play/notanid").is_err());
+        assert!(video_id("https://v.huya.com/").is_err());
     }
 }

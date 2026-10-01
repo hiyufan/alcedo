@@ -28,9 +28,13 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
         }
     }
 
-    // 兜底：分享卡片
+    // 兜底：分享卡片。OG 标签都在文档头部，整页拖完纯属白等传输
     let resp = http
-        .send(Req::get(&url).header("User-Agent", ua::pick(ua::Platform::Desktop)))
+        .send(
+            Req::get(&url)
+                .header("User-Agent", ua::pick(ua::Platform::Desktop))
+                .head_bytes(64 * 1024),
+        )
         .await?;
     resp.error_for_status()?;
     let html = resp.text();

@@ -4,12 +4,25 @@
 //! 前 4 个字符倒过来当十六进制数，它的十进制写法决定了后面那串要怎么删减，
 //! 删完才是真正的 base64。逻辑是从页面 JS 里逆出来的，照抄不要"优化"。
 
+use std::sync::LazyLock;
+
 use base64::Engine;
 use scraper::{Html, Selector};
 
 use crate::error::{Error, Result};
 use crate::http::{ua, Http, Req};
 use crate::model::{Author, VideoInfo};
+
+// 选择器是编译期字面量，写错了测试立刻会挂。scraper 不缓存选择器，
+// 每次请求重新 parse 一遍是纯浪费，提成 static。
+static SHARE_BTN: LazyLock<Selector> = LazyLock::new(|| Selector::parse("#shareMediaBtn").unwrap());
+static DETAIL_AVATAR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(".detail-avatar").unwrap());
+static DETAIL_VIDEO_IMG: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("#detailVideo img").unwrap());
+static COVER_TITLE: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(".detail-cover-title").unwrap());
+static NAME_LINK: LazyLock<Selector> = LazyLock::new(|| Selector::parse(".detail-name a").unwrap());
 
 /// 解析一条美拍分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
@@ -23,39 +36,37 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
 
 fn build(html: &str) -> Result<VideoInfo> {
     let doc = Html::parse_document(html);
-    let attr = |css: &str, name: &str| -> String {
-        Selector::parse(css)
-            .ok()
-            .and_then(|s| doc.select(&s).next())
+    let attr = |sel: &Selector, name: &str| -> String {
+        doc.select(sel)
+            .next()
             .and_then(|el| el.value().attr(name).map(str::to_owned))
             .unwrap_or_default()
     };
-    let text = |css: &str| -> String {
-        Selector::parse(css)
-            .ok()
-            .and_then(|s| doc.select(&s).next())
+    let text = |sel: &Selector| -> String {
+        doc.select(sel)
+            .next()
             .map(|el| el.text().collect::<String>().trim().to_owned())
             .unwrap_or_default()
     };
 
-    let encoded = attr("#shareMediaBtn", "data-video");
+    let encoded = attr(&SHARE_BTN, "data-video");
     if encoded.is_empty() {
         return Err(Error::deleted("页面里没有 data-video，作品可能已删除"));
     }
     let video_url = decode_video(&encoded)?;
 
-    let avatar = attr(".detail-avatar", "src");
+    let avatar = attr(&DETAIL_AVATAR, "src");
     Ok(VideoInfo {
         video_url,
-        cover_url: attr("#detailVideo img", "src"),
-        title: text(".detail-cover-title"),
+        cover_url: attr(&DETAIL_VIDEO_IMG, "src"),
+        title: text(&COVER_TITLE),
         author: Author {
-            uid: attr(".detail-name a", "href")
+            uid: attr(&NAME_LINK, "href")
                 .rsplit('/')
                 .next()
                 .unwrap_or("")
                 .to_owned(),
-            name: attr(".detail-avatar", "alt"),
+            name: attr(&DETAIL_AVATAR, "alt"),
             avatar: prefix_scheme(&avatar),
         },
         ..Default::default()

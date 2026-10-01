@@ -65,19 +65,19 @@ fn build(html: &str) -> Result<VideoInfo> {
     formats.sort_by(|a, b| b.height.cmp(&a.height).then(a.codec.cmp(&b.codec)));
     let best = formats.remove(0);
 
-    let user = util::get(&info, &["user"]).cloned().unwrap_or_default();
+    let user = util::get_or_null(&info, &["user"]);
 
     Ok(VideoInfo {
         video_url: best.url,
-        cover_url: util::first_str(&info, &[&["coverUrl"], &["coverCdnUrls", "0"]]),
+        cover_url: util::first_str(&info, &[&["coverUrl"], &["coverCdnUrls", "0", "url"]]),
         title: util::str_at(&info, &["title"]),
         duration: util::num_at(&info, &["durationMillis"]) / 1000.0,
         height: best.height,
         formats,
         author: Author::new(
-            util::first_id(&user, &[&["id"], &["href"]]),
-            util::str_at(&user, &["name"]),
-            util::str_at(&user, &["headUrl"]),
+            util::first_id(user, &[&["id"], &["href"]]),
+            util::str_at(user, &["name"]),
+            util::str_at(user, &["headUrl"]),
         ),
         ..Default::default()
     })

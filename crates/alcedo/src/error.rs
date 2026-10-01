@@ -67,11 +67,10 @@ impl Reason {
     /// 换一条路 / 重试一次有没有意义。
     ///
     /// `Deleted` 和 `Unsupported` 重试多少次都是同一个结果，别浪费用户的时间。
+    /// `Parse` 也一样：页面结构变了、JSON 解不开是确定性失败，重发一次完整
+    /// 请求只是白等 150ms。
     pub const fn is_retryable(self) -> bool {
-        matches!(
-            self,
-            Reason::Blocked | Reason::Network | Reason::Timeout | Reason::Parse
-        )
+        matches!(self, Reason::Blocked | Reason::Network | Reason::Timeout)
     }
 }
 
@@ -246,6 +245,11 @@ mod tests {
     fn dead_ends_are_not_retryable() {
         assert!(!Reason::Deleted.is_retryable());
         assert!(!Reason::Unsupported.is_retryable());
+        // 页面结构变了 / JSON 解不开是确定性失败，重发完整请求没有意义
+        assert!(!Reason::Parse.is_retryable());
+        assert!(!Reason::Empty.is_retryable());
         assert!(Reason::Blocked.is_retryable());
+        assert!(Reason::Network.is_retryable());
+        assert!(Reason::Timeout.is_retryable());
     }
 }

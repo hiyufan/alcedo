@@ -138,23 +138,32 @@ fn to_format(q: &serde_json::Value) -> Option<Format> {
 }
 
 async fn vod(http: &Http, id: &str) -> Result<VideoInfo> {
-    // 先拿元信息（标题、时长、主播）
+    // 元信息和播放令牌都只依赖已知的录像 id，互不依赖，一起发。
+    // GQL 一个来回常要 200~500ms，串行等于每次解析白等一个 RTT。
+    // 代价是录像不存在时会多发一次令牌请求——错误路径比成功路径少得多，划算。
     let meta_query = format!(
         r#"{{ video(id: "{id}") {{ title lengthSeconds previewThumbnailURL
              owner {{ id displayName profileImageURL(width: 150) }} }} }}"#
     );
-    let meta = gql(http, json!({ "query": meta_query })).await?;
-    let video = util::get(&meta, &["data", "video"])
-        .filter(|v| !v.is_null())
-        .ok_or_else(|| Error::deleted("这个录像不存在、已过期或仅订阅者可见"))?;
-
-    // 再换播放令牌
     let token_query = format!(
         r#"{{ videoPlaybackAccessToken(id: "{id}", params: {{
              platform: "web", playerBackend: "mediaplayer", playerType: "site" }})
              {{ value signature }} }}"#
     );
-    let token = gql(http, json!({ "query": token_query })).await?;
+    let (meta, token) = tokio::join!(
+        gql(http, json!({ "query": meta_query })),
+        gql(http, json!({ "query": token_query })),
+    );
+
+    // 两边都失败时报 meta 的错："录像不存在"比"拿不到令牌"更接近真实原因
+    let meta_value = match meta {
+        Ok(m) => m,
+        Err(e) => return Err(e),
+    };
+    let video = util::get(&meta_value, &["data", "video"])
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| Error::deleted("这个录像不存在、已过期或仅订阅者可见"))?;
+    let token = token?;
     let value = util::str_at(&token, &["data", "videoPlaybackAccessToken", "value"]);
     let sig = util::str_at(&token, &["data", "videoPlaybackAccessToken", "signature"]);
     if value.is_empty() || sig.is_empty() {

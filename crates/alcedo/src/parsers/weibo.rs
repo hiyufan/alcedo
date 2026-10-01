@@ -52,13 +52,13 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     let data = util::get(&json, &["data", "Component_Play_Playinfo"])
         .ok_or_else(|| Error::deleted("微博没有返回播放信息"))?;
 
-    // stream_url 码率最低；urls 里第一条最高
+    // stream_url 码率最低；urls 里按已知清晰度键从高到低挑。
+    // urls 是个 map，serde_json 未开 preserve_order 时按键字母序迭代，
+    // "第一条"并不代表最高清——{mp4_480p_mp4, mp4_hd_mp4} 会先碰到 480p。
     let mut video_url = util::str_at(data, &["stream_url"]);
     if let Some(obj) = util::get(data, &["urls"]).and_then(Value::as_object) {
-        if let Some((_, v)) = obj.iter().next() {
-            if let Some(u) = v.as_str() {
-                video_url = with_scheme(u);
-            }
+        if let Some(u) = best_of_urls(obj) {
+            video_url = with_scheme(u);
         }
     }
 
@@ -119,7 +119,7 @@ async fn parse_post(http: &Http, post_id: &str, original_url: &str) -> Result<Vi
 }
 
 fn build_status(status: &Value) -> VideoInfo {
-    let user = util::get(status, &["user"]).cloned().unwrap_or_default();
+    let user = util::get_or_null(status, &["user"]);
 
     let images = util::arr_at(status, &["pics"])
         .iter()
@@ -139,11 +139,9 @@ fn build_status(status: &Value) -> VideoInfo {
         .collect::<Vec<_>>();
 
     // 博文里内嵌的视频
-    let media = util::get(status, &["page_info"])
-        .cloned()
-        .unwrap_or_default();
+    let media = util::get_or_null(status, &["page_info"]);
     let video_url = util::first_str(
-        &media,
+        media,
         &[
             &["urls", "mp4_720p_mp4"],
             &["urls", "mp4_hd_url"],
@@ -156,16 +154,16 @@ fn build_status(status: &Value) -> VideoInfo {
     VideoInfo {
         video_url: with_scheme(&video_url),
         cover_url: with_scheme(&util::first_str(
-            &media,
+            media,
             &[&["page_pic", "url"], &["page_pic"]],
         )),
         title: util::strip_tags(&util::str_at(status, &["text"])),
         images,
-        duration: util::num_at(&media, &["media_info", "duration"]),
+        duration: util::num_at(media, &["media_info", "duration"]),
         author: Author::new(
-            util::id_at(&user, &["id"]),
-            util::str_at(&user, &["screen_name"]),
-            util::first_str(&user, &[&["avatar_large"], &["profile_image_url"]]),
+            util::id_at(user, &["id"]),
+            util::str_at(user, &["screen_name"]),
+            util::first_str(user, &[&["avatar_large"], &["profile_image_url"]]),
         ),
         ..Default::default()
     }
@@ -178,6 +176,17 @@ fn with_scheme(u: &str) -> String {
     } else {
         u.to_owned()
     }
+}
+
+/// Component_Play_Playinfo 的 `urls` map 里挑清晰度最高的地址。
+///
+/// 已知键从高到低显式挑；都不认识时落回 map 的第一条（字母序，老行为），
+/// 平台上新清晰度档位时不至于选空。
+fn best_of_urls(urls: &serde_json::Map<String, Value>) -> Option<&str> {
+    ["mp4_1080p_mp4", "mp4_720p_mp4", "mp4_hd_mp4"]
+        .iter()
+        .find_map(|k| urls.get(*k).and_then(Value::as_str))
+        .or_else(|| urls.values().find_map(Value::as_str))
 }
 
 #[cfg(test)]
@@ -225,6 +234,21 @@ mod tests {
         assert_eq!(with_scheme("//a/b"), "https://a/b");
         assert_eq!(with_scheme("https://a/b"), "https://a/b");
         assert_eq!(with_scheme(""), "");
+    }
+
+    #[test]
+    fn urls_pick_highest_known_tier_not_alphabetical_first() {
+        let to_map = |v: serde_json::Value| v.as_object().unwrap().clone();
+        // 字母序 480p 排在 hd 前面，按清晰度该选 hd
+        let urls = to_map(json!({"mp4_480p_mp4": "//v/480.mp4", "mp4_hd_mp4": "//v/hd.mp4"}));
+        assert_eq!(best_of_urls(&urls), Some("//v/hd.mp4"));
+
+        let urls = to_map(json!({"mp4_720p_mp4": "//v/720.mp4", "mp4_1080p_mp4": "//v/1080.mp4"}));
+        assert_eq!(best_of_urls(&urls), Some("//v/1080.mp4"));
+
+        // 全是不认识的键：落回第一条，别选空
+        let urls = to_map(json!({"m3u8_auto": "//v/auto.m3u8", "zzz": "//v/z.mp4"}));
+        assert_eq!(best_of_urls(&urls), Some("//v/auto.m3u8"));
     }
 
     #[test]

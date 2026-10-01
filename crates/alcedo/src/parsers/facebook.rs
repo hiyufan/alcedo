@@ -75,6 +75,9 @@ fn playable_url(html: &str) -> Option<String> {
                 // 值到下一个未转义的引号为止
                 let end = rest.find("\",").or_else(|| rest.find('"'))?;
                 let raw = &rest[..end];
+                // 转义形态（key\":\"）的值以 \" 收尾，find("\",") 会把收尾的
+                // 反斜杠一起带进来；地址本身不会以 \ 结尾，剥掉
+                let raw = raw.strip_suffix('\\').unwrap_or(raw);
                 let cleaned = unescape_json_url(raw);
                 if cleaned.starts_with("http") {
                     return Some(cleaned);

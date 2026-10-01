@@ -91,7 +91,7 @@ jobs:
           "$bin" --version
           "$bin" --list > /dev/null
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.id }}
           path: target/${{ matrix.target }}/release/${{ matrix.exe }}

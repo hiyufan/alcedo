@@ -8,16 +8,17 @@
 //! ```text
 //! GET /parse?url=<链接或分享文案>      解析
 //! GET /parse?source=douyin&id=<作品ID> 已知平台和 ID 时直接解析
-//! GET /health                          存活检查
+//! GET /health                          存活检查（缓存条数、中继保温、按平台×原因的解析统计）
 //! ```
 //!
 //! 成功返回 200 + `VideoInfo` 的 JSON；失败返回对应状态码 +
 //! `{"reason": "...", "message": "...", "detail": "..."}`，`reason` 取值见
 //! [`alcedo::Reason`]。
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use alcedo::{Client, Reason, Source};
@@ -38,6 +39,12 @@ const DEFAULT_PREWARM: &[Source] = &[Source::DouYin, Source::BiliBili, Source::R
 /// 保温间隔。连接池空闲 300 秒就回收（见 `alcedo::http`），赶在那之前
 /// 再碰一次，低流量时也不会让某个用户撞上冷连接。
 const KEEP_WARM_EVERY: Duration = Duration::from_secs(240);
+
+/// 中继保温间隔。边缘节点侧的空闲超时在 70~130 秒之间（跨洋链路实测），
+/// 60 秒一个探针保证连接永远在热的那一侧。探针是「带令牌、不带 url」的
+/// 空请求，边缘函数直接 400，不对任何平台产生出站流量——冷握手实测
+/// 1.3s，热连接 0.18s，一个空来回换掉这 1.1s 很划算。
+const RELAY_KEEPALIVE_EVERY: Duration = Duration::from_secs(60);
 
 /// 服务配置，来自命令行参数和环境变量。
 #[derive(Debug)]
@@ -93,6 +100,38 @@ impl Options {
 struct AppState {
     client: Client,
     token: Option<String>,
+    stats: Stats,
+}
+
+/// 按平台 × 原因累计解析结果，挂在 `/health` 上。
+///
+/// 平台改版时哪个解析器的 `parse` 类错误突然涨、哪个平台整体被风控，一眼
+/// 可见——这正是排障时最想知道的两件事。进程内存里的计数器，重启归零：
+/// 是排障用的仪表，不是审计日志。
+#[derive(Default)]
+struct Stats {
+    /// (平台, 原因) -> 次数。原因 `ok` 表示成功。
+    counts: Mutex<BTreeMap<&'static str, BTreeMap<&'static str, u64>>>,
+}
+
+impl Stats {
+    fn record(&self, source: &'static str, reason: &'static str) {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(source)
+            .or_default()
+            .entry(reason)
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+    }
+
+    fn snapshot(&self) -> BTreeMap<&'static str, BTreeMap<&'static str, u64>> {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 /// 跑服务，直到收到 Ctrl-C。
@@ -110,9 +149,24 @@ pub(crate) async fn run(opts: Options) -> Result<(), String> {
         });
     }
 
+    // 中继保温和预热是两回事：走中继时平台那一跳发生在边缘函数里，本地
+    // 根本没有平台连接池，唯一要焐的是到边缘节点那条连接——所以配了中继
+    // 就自动开，不依赖 ALCEDO_PREWARM。
+    let relay_keepalive = client.config().relay_cn.is_some();
+    if relay_keepalive {
+        let c = client.clone();
+        tokio::spawn(async move {
+            loop {
+                c.ping_relay().await;
+                tokio::time::sleep(RELAY_KEEPALIVE_EVERY).await;
+            }
+        });
+    }
+
     let state = Arc::new(AppState {
         client,
         token: opts.token.clone(),
+        stats: Stats::default(),
     });
     let app = Router::new()
         .route("/parse", get(parse))
@@ -124,13 +178,14 @@ pub(crate) async fn run(opts: Options) -> Result<(), String> {
         .map_err(|e| format!("监听 {} 失败: {e}", opts.listen))?;
     let names: Vec<&str> = opts.prewarm.iter().map(|s| s.as_str()).collect();
     eprintln!(
-        "alcedo serve 已启动: http://{}  预热: {}  鉴权: {}",
+        "alcedo serve 已启动: http://{}  预热: {}  中继保温: {}  鉴权: {}",
         opts.listen,
         if names.is_empty() {
             "无".to_owned()
         } else {
             names.join(",")
         },
+        if relay_keepalive { "60s" } else { "无" },
         if opts.token.is_some() { "开" } else { "关" },
     );
 
@@ -159,15 +214,20 @@ async fn parse(
     }
 
     let started = Instant::now();
-    let (what, result) = match (q.url, q.source, q.id) {
+    let (what, label, result) = match (q.url, q.source, q.id) {
         (Some(url), _, _) => {
+            // 统计的来源标注：成功时结果里有权威的 source，失败时只能先从
+            // 链接猜一个；猜不出（整段文案、不认识的站点）记作 "-"
+            let label = alcedo::util::extract_url(&url)
+                .and_then(alcedo::registry::detect)
+                .map_or("-", Source::as_str);
             let r = state.client.parse(&url).await;
-            (url, r)
+            (url, label, r)
         }
         (None, Some(src), Some(id)) => match Source::from_str(&src) {
             Ok(s) => {
                 let r = state.client.parse_id(s, &id).await;
-                (format!("{src}:{id}"), r)
+                (format!("{src}:{id}"), s.as_str(), r)
             }
             Err(_) => {
                 return error_response(Reason::Unsupported, &format!("认不出这个平台: {src}"));
@@ -182,10 +242,12 @@ async fn parse(
     match result {
         Ok(info) => {
             let src = info.source.map_or("?", Source::as_str);
+            state.stats.record(src, "ok");
             eprintln!("parse ok   {src:<10} {ms:>5}ms  {}", shorten(&what));
             Json(info).into_response()
         }
         Err(e) => {
+            state.stats.record(label, e.reason.as_str());
             eprintln!(
                 "parse fail {:<10} {ms:>5}ms  {}  {}",
                 e.reason,
@@ -205,6 +267,8 @@ async fn health(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
         "cache_entries": alcedo::result_cache().len(),
+        "relay_keepalive": state.client.config().relay_cn.is_some(),
+        "stats": state.stats.snapshot(),
     }))
     .into_response()
 }
@@ -318,5 +382,19 @@ mod tests {
         assert_eq!(out.chars().count(), 81);
         assert!(out.ends_with('…'));
         assert_eq!(shorten(" a "), "a");
+    }
+
+    #[test]
+    fn stats_counts_by_source_and_reason() {
+        let s = Stats::default();
+        s.record("douyin", "ok");
+        s.record("douyin", "ok");
+        s.record("douyin", "deleted");
+        s.record("-", "unsupported");
+        let snap = s.snapshot();
+        assert_eq!(snap["douyin"]["ok"], 2);
+        assert_eq!(snap["douyin"]["deleted"], 1);
+        assert_eq!(snap["-"]["unsupported"], 1);
+        assert!(!snap.contains_key("bilibili"), "没出现的平台不该有条目");
     }
 }

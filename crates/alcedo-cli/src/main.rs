@@ -187,6 +187,8 @@ fn print_help() {
   alcedo serve [--listen 地址] [--prewarm 平台,...]
                               常驻 HTTP 服务, 默认听 127.0.0.1:7878
                               GET /parse?url=<链接>  GET /health
+                              配了 ALCEDO_RELAY_CN 时自动每 60 秒给中继发
+                              保温探针（边缘函数直接 400, 不对平台产生请求）
 
 环境变量:
   ALCEDO_PROXY                所有平台的代理, 如 http://127.0.0.1:7890

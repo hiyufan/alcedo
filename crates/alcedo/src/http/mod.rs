@@ -498,6 +498,22 @@ impl Http {
         self.relay.is_some()
     }
 
+    /// 给到中继端点的连接保温：发一个「带令牌、不带 `url`」的探针，见
+    /// [`relay::Relay::probe`]。
+    ///
+    /// 返回是否发了探针（没配中继就是 `false`）。探针连不上也不报错：
+    /// 保温是尽力而为的例行公事，等下一轮就好。
+    ///
+    /// 走中继时本地唯一要焐的连接就是到边缘节点那条——平台那一跳发生在
+    /// 边缘函数里，本地的平台连接池根本不存在。
+    pub async fn ping_relay(&self) -> bool {
+        let Some(relay) = &self.relay else {
+            return false;
+        };
+        let _ = relay.probe(&self.client).send().await;
+        true
+    }
+
     /// 当前配置。
     pub fn config(&self) -> &Config {
         &self.cfg

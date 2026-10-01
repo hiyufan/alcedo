@@ -17,6 +17,8 @@
 //! - **静态分发**：平台识别后走 `match`，没有 trait object，解析路径上零虚调用。
 //! - **同 key 去重**：并发解析同一条链接时只放一个真正出去（single-flight），
 //!   其余等它的结果——热门内容的并发不会穿透缓存把上游打一遍。
+//! - **负缓存**：`deleted` / `unsupported` 这类稳定失败也缓存 60 秒，死链的
+//!   突发转发不再每个都真打一次平台；暂时性失败（风控 / 断网 / 超时）不缓存。
 //! - **逐跳 SSRF**：短链跳转的每一跳都过一遍内网地址检查，拦在 DNS 层，没有
 //!   检查与连接之间的时间差。
 //! - **结构化错误**：失败都带 [`Reason`]，前端能直接说人话。
@@ -129,6 +131,30 @@ impl Client {
         futures_util::future::join_all(tasks).await;
     }
 
+    /// 给国内中继的连接保温（没配中继时返回 `false`，什么都不做）。
+    ///
+    /// 探针是「带令牌、不带 `url`」的空请求，中继函数直接 400 回来，不对
+    /// 任何平台产生出站流量。跨洋链路冷握手实测 1.3s、热连接 0.18s，而边缘
+    /// 节点侧的空闲超时只有一两分钟，所以常驻服务要每一两分钟调一次——
+    /// `alcedo serve` 已经自动这么做了，自己托管服务的话照这个频率来。
+    ///
+    /// ```no_run
+    /// # async fn demo() -> alcedo::Result<()> {
+    /// let client = alcedo::Client::new()?;
+    /// if client.ping_relay().await {
+    ///     println!("中继探针已发出");
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn ping_relay(&self) -> bool {
+        // 任意国内平台都行：它只决定用哪个连接池，而走中继时本地唯一要焐的
+        // 连接就是到边缘节点那条（平台那一跳发生在边缘函数里）
+        let Ok(http) = http::Http::new(Arc::clone(&self.cfg), Some(Source::DouYin)) else {
+            return false;
+        };
+        http.ping_relay().await
+    }
+
     /// 当前生效的配置。
     pub fn config(&self) -> &Config {
         &self.cfg
@@ -172,8 +198,8 @@ impl Client {
     /// 等待与重新排队的循环在 [`inflight::Flight::claim`] 内部：它要么带来
     /// 领队的现成结果（成功或失败），要么把执行权交出来，不会空转回来。
     async fn execute(&self, source: Source, key: String, target: Target<'_>) -> Result<VideoInfo> {
-        if let Some(hit) = CACHE.get(&key) {
-            return Ok(hit);
+        if let Some(cached) = CACHE.get(&key) {
+            return cached;
         }
         match FLIGHT.claim(&key).await {
             inflight::Claim::Wait(done) => done,
@@ -197,7 +223,14 @@ impl Client {
                     .await
             }
         };
-        let done = self.settle(source, target.as_str(), outcome)?;
+        let done = match self.settle(source, target.as_str(), outcome) {
+            Ok(info) => info,
+            Err(e) => {
+                // 稳定事实类的失败进负缓存：死链的重复解析不再真打平台
+                CACHE.put_error(key, &e);
+                return Err(e);
+            }
+        };
         CACHE.put(key, &done);
         Ok(done)
     }
@@ -380,5 +413,11 @@ mod tests {
         let c = Client::with_config(Config::default());
         let err = c.parse_id(Source::DouYin, "  ").await.unwrap_err();
         assert_eq!(err.reason, Reason::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn ping_relay_without_relay_is_a_noop() {
+        let c = Client::with_config(Config::default());
+        assert!(!c.ping_relay().await, "没配中继时不该发任何请求");
     }
 }

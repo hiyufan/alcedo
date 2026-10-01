@@ -22,19 +22,39 @@
 //! 用户拿到过期事实的概率越大。而收益是递减的：同一条链接每小时被解析 100 次
 //! 时，5 分钟的 TTL 已经能挡掉约 92%，拉到 60 分钟也只多挡 6%。用那 6% 去换
 //! "内容没了还在返回成功"的窗口，不划算。
+//!
+//! ## 失败也缓存（负缓存）
+//!
+//! `deleted` / `unsupported` / `parse` 这类失败是**稳定事实**：再解析一遍，
+//! 平台还是给同一个答案。死链被转发之后，每来一个人都真打一次平台毫无意义。
+//! 所以非重试类失败也进缓存，固定 [`NEGATIVE_TTL`]（60 秒）后过期——足够
+//! 挡掉一条死链的转发高峰，又不至于把"配好 cookie 就能好"的状态判死太久。
+//! `blocked` / `network` / `timeout` 是暂时状态，**绝不**负缓存：过会儿可能
+//! 就自己好了。换了 cookie、更新了解析器之后调 [`Cache::clear`] 立即清场。
 
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+use crate::error::{Error, Reason, Result};
 use crate::model::VideoInfo;
 
 /// 安全余量：地址快到期时就别再从缓存给了，留出下载的时间。
 const SAFETY_MARGIN: Duration = Duration::from_secs(120);
 
+/// 负缓存的固定 TTL。错误结果没有直链可读寿命，固定一个短值就够。
+const NEGATIVE_TTL: Duration = Duration::from_secs(60);
+
+/// 缓存里的一条：要么是成功结果，要么是短命的失败（负缓存）。
+/// `Ok` 装 `Box` 是因为 `VideoInfo` 比错误大一个量级，枚举按大的算。
+enum Value {
+    Ok(Box<VideoInfo>),
+    Err { reason: Reason, detail: String },
+}
+
 struct Entry {
     key: String,
-    info: VideoInfo,
+    value: Value,
     expires_at: Instant,
     /// 命中计数，淘汰时优先留热的
     hits: u32,
@@ -44,6 +64,8 @@ struct Entry {
 pub struct Cache {
     entries: Mutex<Vec<Entry>>,
     ttl: Duration,
+    /// 失败结果（负缓存）自己的 TTL，和 `ttl` 分开算
+    negative_ttl: Duration,
     capacity: usize,
 }
 
@@ -52,17 +74,24 @@ impl std::fmt::Debug for Cache {
         f.debug_struct("Cache")
             .field("len", &self.entries.lock().len())
             .field("ttl", &self.ttl)
+            .field("negative_ttl", &self.negative_ttl)
             .field("capacity", &self.capacity)
             .finish()
     }
 }
 
 impl Cache {
-    /// `ttl` 为 0 表示不缓存。
+    /// `ttl` 为 0 表示不缓存（负缓存也一起关）。
     pub const fn new(ttl: Duration, capacity: usize) -> Self {
+        Self::with_negative_ttl(ttl, NEGATIVE_TTL, capacity)
+    }
+
+    /// 负缓存 TTL 单独指定的版本。测试用来把 60 秒缩到毫秒级。
+    pub const fn with_negative_ttl(ttl: Duration, negative_ttl: Duration, capacity: usize) -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
             ttl,
+            negative_ttl,
             capacity,
         }
     }
@@ -72,8 +101,8 @@ impl Cache {
         !self.ttl.is_zero() && self.capacity > 0
     }
 
-    /// 取一条还没过期的结果。
-    pub fn get(&self, key: &str) -> Option<VideoInfo> {
+    /// 取一条还没过期的记录；负缓存命中时返回带同样原因的 [`Error`]。
+    pub fn get(&self, key: &str) -> Option<Result<VideoInfo>> {
         if !self.is_enabled() {
             return None;
         }
@@ -84,10 +113,13 @@ impl Cache {
             return None; // 留着让 put 覆盖，不在读路径上做清理
         }
         hit.hits = hit.hits.saturating_add(1);
-        Some(hit.info.clone())
+        Some(match &hit.value {
+            Value::Ok(info) => Ok(info.as_ref().clone()),
+            Value::Err { reason, detail } => Err(Error::new(*reason, detail.clone())),
+        })
     }
 
-    /// 存一条。TTL 取「配置上限」和「直链自身剩余寿命」里更短的那个。
+    /// 存一条成功结果。TTL 取「配置上限」和「直链自身剩余寿命」里更短的那个。
     ///
     /// 直链已经快过期、或者压根读不出寿命又没有可用地址时，不缓存。
     pub fn put(&self, key: &str, info: &VideoInfo) {
@@ -97,7 +129,26 @@ impl Cache {
         let Some(ttl) = self.effective_ttl(info) else {
             return;
         };
+        self.insert(key, Value::Ok(Box::new(info.clone())), ttl);
+    }
 
+    /// 存一条失败结果（负缓存），取舍见模块文档。重试类原因直接忽略。
+    pub fn put_error(&self, key: &str, err: &Error) {
+        if !self.is_enabled() || self.negative_ttl.is_zero() || err.reason.is_retryable() {
+            return;
+        }
+        self.insert(
+            key,
+            Value::Err {
+                reason: err.reason,
+                detail: err.detail.clone(),
+            },
+            self.negative_ttl,
+        );
+    }
+
+    /// 插入或覆盖一条，带容量淘汰。成功和失败走同一套，谁后写谁说了算。
+    fn insert(&self, key: &str, value: Value, ttl: Duration) {
         let now = Instant::now();
         let mut entries = self.entries.lock();
 
@@ -105,7 +156,7 @@ impl Cache {
         entries.retain(|e| e.expires_at > now);
 
         if let Some(slot) = entries.iter_mut().find(|e| e.key == key) {
-            slot.info = info.clone();
+            slot.value = value;
             slot.expires_at = now + ttl;
             return;
         }
@@ -122,7 +173,7 @@ impl Cache {
         }
         entries.push(Entry {
             key: key.to_owned(),
-            info: info.clone(),
+            value,
             expires_at: now + ttl,
             hits: 0,
         });
@@ -354,10 +405,60 @@ mod tests {
         assert!(cache.get("k").is_none());
         cache.put("k", &info);
         assert_eq!(
-            cache.get("k").map(|i| i.video_url),
-            Some("https://x/a.mp4".into())
+            cache.get("k").unwrap().unwrap().video_url,
+            "https://x/a.mp4"
         );
         assert!(cache.get("别的key").is_none());
+    }
+
+    #[test]
+    fn negative_entry_round_trips_the_error() {
+        let cache = Cache::new(Duration::from_secs(300), 8);
+        cache.put_error("k", &Error::deleted("HTTP 404"));
+        let err = cache.get("k").unwrap().unwrap_err();
+        assert_eq!(err.reason, Reason::Deleted);
+        assert_eq!(err.detail, "HTTP 404");
+        // 成功结果随后覆盖负缓存：内容可能被恢复（私密转公开）
+        cache.put("k", &info_with("https://x/a.mp4"));
+        assert!(cache.get("k").unwrap().is_ok());
+    }
+
+    #[test]
+    fn error_over_a_success_slot_follows_the_same_rule() {
+        // 反向覆盖也要成立：内容被删后，负缓存顶掉旧的成功结果
+        let cache = Cache::new(Duration::from_secs(300), 8);
+        cache.put("k", &info_with("https://x/a.mp4"));
+        cache.put_error("k", &Error::deleted("没了"));
+        assert_eq!(cache.get("k").unwrap().unwrap_err().reason, Reason::Deleted);
+    }
+
+    #[test]
+    fn retryable_failures_are_never_negative_cached() {
+        // 风控 / 断网 / 超时是暂时状态，缓存它们等于把"过会儿就好了"判成死
+        let cache = Cache::new(Duration::from_secs(300), 8);
+        cache.put_error("k", &Error::new(Reason::Blocked, "HTTP 429"));
+        cache.put_error("k", &Error::bare(Reason::Timeout));
+        cache.put_error("k", &Error::new(Reason::Network, "refused"));
+        assert!(cache.get("k").is_none());
+    }
+
+    #[test]
+    fn negative_entries_expire_on_their_own_ttl() {
+        let cache =
+            Cache::with_negative_ttl(Duration::from_secs(300), Duration::from_millis(30), 8);
+        cache.put_error("k", &Error::deleted("没了"));
+        assert!(cache.get("k").is_some(), "刚存的错误应当立刻可读");
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(cache.get("k").is_none(), "负缓存按自己的 TTL 过期");
+    }
+
+    #[test]
+    fn zero_negative_ttl_disables_it_without_touching_success() {
+        let cache = Cache::with_negative_ttl(Duration::from_secs(300), Duration::ZERO, 8);
+        cache.put_error("k", &Error::deleted("没了"));
+        assert!(cache.get("k").is_none());
+        cache.put("k", &info_with("https://x/a.mp4"));
+        assert!(cache.get("k").unwrap().is_ok());
     }
 
     #[test]

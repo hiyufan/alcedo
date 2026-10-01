@@ -47,6 +47,25 @@ impl Relay {
         })
     }
 
+    /// 保温探针：带令牌、不带 `url` 的请求。
+    ///
+    /// 中继函数收到没有 `url` 的请求会直接 400 回来，**不会对任何平台产生
+    /// 出站流量**——这一个来回唯一的目的，是让本机到边缘节点的 TLS 连接别
+    /// 因为空闲被掐掉。跨洋链路冷握手实测 1.3s、热连接 0.18s，而边缘节点
+    /// 侧的空闲超时只有一两分钟：解析请求零零散散地来时，不保温的话大多
+    /// 数用户都正好撞上冷连接。
+    pub(crate) fn probe(&self, client: &Client) -> RequestBuilder {
+        let mut url = self.endpoint.clone();
+        url.query_pairs_mut().append_pair("url", "");
+        let mut builder = client
+            .get(url)
+            .header("x-relay-method", Method::GET.as_str());
+        if let Some(t) = &self.token {
+            builder = builder.header("x-relay-token", t);
+        }
+        builder
+    }
+
     /// 把一次对 `target` 的请求包装成对中转的请求。
     pub fn wrap(
         &self,
@@ -223,6 +242,25 @@ mod tests {
     fn rejects_bad_endpoint() {
         assert!(Relay::new("ftp://x/relay", None).is_err());
         assert!(Relay::new("not a url", None).is_err());
+    }
+
+    #[test]
+    fn probe_carries_token_but_no_target() {
+        let relay = Relay::new("https://relay.example/relay", Some("tok")).unwrap();
+        let req = relay.probe(&client()).build().unwrap();
+        assert_eq!(req.method(), Method::GET);
+        // 唯一的 query 参数是空的 url —— 中继函数据此直接 400，不出站
+        let got: Vec<_> = req.url().query_pairs().collect();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "url");
+        assert_eq!(got[0].1, "");
+        assert_eq!(req.headers()["x-relay-token"], "tok");
+        assert_eq!(req.headers()["x-relay-method"], "GET");
+
+        // 没配令牌就不带这个头
+        let relay = Relay::new("https://relay.example/relay", None).unwrap();
+        let req = relay.probe(&client()).build().unwrap();
+        assert!(!req.headers().contains_key("x-relay-token"));
     }
 
     fn fake(status: u16, headers: &[(&str, String)]) -> reqwest::Response {

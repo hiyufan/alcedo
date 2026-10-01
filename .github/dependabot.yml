@@ -6,7 +6,8 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      # 补丁版分一组，免得每周开一堆 PR
+      # 补丁版分一组，免得每周开一堆 PR。minor 故意不并：依赖大多是 0.x，
+      # 0.9 → 0.10 在 dependabot 眼里是 minor、实际是破坏性升级，得单独过
       patch:
         update-types: [patch]
 
@@ -14,3 +15,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:
+      # 官方 action 常常一起跳大版本（checkout / setup-node / artifact 一来就是一串），
+      # 并成一个 PR。release.yml 只在推 tag 时跑，PR 上的绿灯覆盖不到它，合了之后发版留意
+      actions:
+        patterns: ["*"]

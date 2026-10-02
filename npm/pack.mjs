@@ -1,23 +1,40 @@
 // 把 CI 构建出的各平台二进制组装成可发布的 npm 包。
 //
-//   node npm/pack.mjs <版本号> <二进制目录> <输出目录>
+//   node npm/pack.mjs <版本号> <二进制目录> <输出目录> [--scope @组织]
 //
 // 二进制目录按 <平台 id>/<可执行文件> 摆放（即 release 工作流下载 artifact 后的样子）。
 // 输出目录里每个子目录是一个包：先发各平台包，最后发 alcedo-cli 主包，
 // 否则主包的 optionalDependencies 会短暂指向不存在的版本。
+//
+// --scope 给包名加组织前缀（@hiyufan/alcedo-cli），发 GitHub Packages 用——
+// 那边的 npm 源只收和 owner 同名的 scope。目录名始终用不带 scope 的基础名，
+// 发布方从每个目录的 package.json 里读真实包名。
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const [version, binDir, outDir] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const [version, binDir, outDir] = argv;
+let scope = "";
+for (let i = 3; i < argv.length; i++) {
+  if (argv[i] === "--scope") {
+    scope = argv[++i] ?? "";
+  }
+}
 if (!version || !binDir || !outDir) {
-  console.error("用法: node npm/pack.mjs <版本号> <二进制目录> <输出目录>");
+  console.error("用法: node npm/pack.mjs <版本号> <二进制目录> <输出目录> [--scope @组织]");
   process.exit(2);
 }
+if (scope && !/^@[a-z0-9-]+$/.test(scope)) {
+  console.error(`scope 必须形如 @小写组织名: ${scope}`);
+  process.exit(2);
+}
+const fullName = (base) => (scope ? `${scope}/${base}` : base);
 
 const platforms = JSON.parse(readFileSync(join(here, "platforms.json"), "utf8"));
 const main = JSON.parse(readFileSync(join(here, "alcedo-cli", "package.json"), "utf8"));
+const mainBase = main.name;
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
@@ -33,8 +50,9 @@ main.version = version;
 main.optionalDependencies = {};
 
 for (const p of platforms) {
-  const name = `${main.name}-${p.id}`;
-  const dir = join(outDir, name);
+  const base = `${main.name}-${p.id}`;
+  const name = fullName(base);
+  const dir = join(outDir, base);
   mkdirSync(join(dir, "bin"), { recursive: true });
 
   const dest = join(dir, "bin", p.exe);
@@ -63,12 +81,14 @@ for (const p of platforms) {
   main.optionalDependencies[name] = version;
 }
 
-const mainDir = join(outDir, main.name);
+const mainDir = join(outDir, mainBase);
+main.name = fullName(mainBase);
 cpSync(join(here, "alcedo-cli"), mainDir, { recursive: true });
 copyFileSync(join(here, "..", "LICENSE"), join(mainDir, "LICENSE"));
 writeFileSync(join(mainDir, "package.json"), `${JSON.stringify(main, null, 2)}\n`);
 
-// 发布顺序：平台包在前，主包在最后
-const order = [...Object.keys(main.optionalDependencies), main.name];
+// 发布顺序：平台包在前，主包在最后。写目录名（= 不带 scope 的基础名），
+// 包名由发布方从各目录的 package.json 读
+const order = [...platforms.map((p) => `${mainBase}-${p.id}`), mainBase];
 writeFileSync(join(outDir, "publish-order.txt"), `${order.join("\n")}\n`);
-console.log(`已生成 ${order.length} 个包 @ ${version} -> ${outDir}`);
+console.log(`已生成 ${order.length} 个包 @ ${version}${scope ? `（scope ${scope}）` : ""} -> ${outDir}`);

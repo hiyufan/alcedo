@@ -5,7 +5,8 @@ name: 发布
 #   1. 校验 tag 和 Cargo.toml 里的版本一致，跑一遍测试
 #   2. 按 npm/platforms.json 在各平台原生构建 CLI（Linux 用 musl 静态链接，不挑发行版）
 #   3. 发到 npm：各平台包 alcedo-cli-<os>-<arch> + 主包 alcedo-cli
-#   4. 建 GitHub Release，附各平台压缩包
+#   4. 同一套包带 @hiyufan scope 发到 GitHub Packages（主页 Packages 页可见）
+#   5. 建 GitHub Release，附各平台压缩包
 #
 # 带预发布后缀的 tag（v0.2.0-beta.1）在 npm 上打 next 标签，不影响 latest。
 on:
@@ -135,14 +136,60 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           NPM_TAG: ${{ needs.prepare.outputs.npm-tag }}
         run: |
-          while read -r pkg; do
+          # publish-order.txt 里是目录名（= 不带 scope 的基础名），
+          # 真实包名从各目录的 package.json 读——npm 侧和 GitHub Packages 侧共用
+          while read -r dir; do
+            pkg="$(jq -r .name "dist/$dir/package.json")"
             # 已发布的跳过：中途失败后重跑工作流不会卡在"版本已存在"
             if npm view "$pkg@$VERSION" version > /dev/null 2>&1; then
               echo "$pkg@$VERSION 已存在，跳过"
               continue
             fi
             # 必须带 ./，否则 npm 12 会把 dist/xxx 当成 GitHub 仓库简写
-            npm publish "./dist/$pkg" --access public --provenance --tag "$NPM_TAG"
+            npm publish "./dist/$dir" --access public --provenance --tag "$NPM_TAG"
+          done < dist/publish-order.txt
+
+  github-packages:
+    name: 发布到 GitHub Packages
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # 往 npm.pkg.github.com 发包用 GITHUB_TOKEN 本身，不需要额外配密钥
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          # GitHub 的 npm 源只收和 owner 同名的 scope
+          scope: "@hiyufan"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*
+          path: artifacts
+
+      - name: 组装（带 @hiyufan scope）
+        run: |
+          mkdir bins
+          for d in artifacts/bin-*; do mv "$d" "bins/${d#artifacts/bin-}"; done
+          node npm/pack.mjs "${{ needs.prepare.outputs.version }}" bins dist --scope @hiyufan
+
+      - name: 发布
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm-tag }}
+        run: |
+          # 不带 --provenance：那是 npmjs.com 的功能，GitHub 源不支持
+          while read -r dir; do
+            pkg="$(jq -r .name "dist/$dir/package.json")"
+            if npm view "$pkg@$VERSION" version > /dev/null 2>&1; then
+              echo "$pkg@$VERSION 已存在，跳过"
+              continue
+            fi
+            npm publish "./dist/$dir" --access public --tag "$NPM_TAG"
           done < dist/publish-order.txt
 
   github-release:

@@ -332,7 +332,7 @@ fn media_secret() -> &'static [u8] {
 
 /// `url` + 过期时刻的 HMAC-SHA256，取前 32 个十六进制位（对齐 Python 侧 net.sign）。
 fn media_sign(url: &str, exp: u64) -> String {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     let mut mac = Hmac::<Sha256>::new_from_slice(media_secret()).expect("HMAC 接受任意长度密钥");
     mac.update(url.as_bytes());

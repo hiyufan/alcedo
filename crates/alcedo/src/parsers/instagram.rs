@@ -23,17 +23,36 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let code = shortcode_from_url(url)
         .ok_or_else(|| Error::unsupported("链接里没有 Instagram 的作品 code"))?;
 
+    let mut api_err = None;
     if let Some(id) = media_id_from_shortcode(&code) {
         match api_info(http, &id).await {
             Ok(info) => return Ok(info),
-            Err(e) if !e.reason.is_retryable() && e.reason != crate::Reason::Empty => {
-                return Err(e)
+            // 接口报什么都先别信：未登录请求它会把好端端的帖子也报成 404，
+            // 401/403 则是出口被挡。两种情况 OG 兜底都可能拿得到，
+            // 只有落地页也说没了，才是真没了。
+            Err(e) => {
+                tracing::debug!(error = %e, "IG 接口不可用，退到 OG 标签");
+                api_err = Some(e);
             }
-            Err(e) => tracing::debug!(error = %e, "IG 接口不可用，退到 OG 标签"),
         }
     }
 
-    og_fallback(http, url, "Instagram").await
+    og_fallback(http, url, "Instagram")
+        .await
+        .map_err(|og| more_useful(api_err, og))
+}
+
+/// 接口和兜底都失败时报哪个。
+///
+/// 默认信落地页——它是用户在浏览器里看到的那个结果。例外是接口明确要求登录、
+/// 落地页又没说内容不存在：这时"配 cookie"才是站长能动手的方向。
+fn more_useful(api: Option<Error>, og: Error) -> Error {
+    match api {
+        Some(api) if api.reason == crate::Reason::Login && og.reason != crate::Reason::Deleted => {
+            api
+        }
+        _ => og,
+    }
 }
 
 /// 解析一条 Threads 帖子链接（和 Instagram 同一套后端）。
@@ -218,6 +237,23 @@ fn media_id_from_shortcode(code: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn landing_page_verdict_wins_over_api_404() {
+        use crate::Reason;
+        // 接口 404 但落地页说要登录：报登录，不能报"已删除"
+        let got = more_useful(Some(Error::deleted("api 404")), Error::login("og"));
+        assert_eq!(got.reason, Reason::Login);
+        // 落地页也说没了，才是真没了
+        let got = more_useful(Some(Error::login("api")), Error::deleted("og 404"));
+        assert_eq!(got.reason, Reason::Deleted);
+        // 接口要登录、落地页只说拿不到：登录是能动手的方向
+        let got = more_useful(Some(Error::login("api")), Error::restricted("og"));
+        assert_eq!(got.reason, Reason::Login);
+        // 没走接口（shortcode 解不出 id）就只有落地页的结论
+        let got = more_useful(None, Error::restricted("og"));
+        assert_eq!(got.reason, Reason::Restricted);
+    }
 
     #[test]
     fn extracts_shortcode() {

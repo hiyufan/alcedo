@@ -199,6 +199,58 @@ async fn dailymotion() {
     assert_usable(&info);
 }
 
+/// TikTok 官方嵌入文档里的示例视频，2019 年发的，活得够久。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn tiktok() {
+    let info = parse("https://www.tiktok.com/@scout2015/video/6718335390845095173").await;
+    assert_usable(&info);
+    assert!(!info.author.name.is_empty(), "作者为空");
+    // 直链带签名且校验 Referer，缺了 CDN 一律 403
+    assert_eq!(
+        info.video_headers.get("Referer").map(String::as_str),
+        Some("https://www.tiktok.com/")
+    );
+}
+
+/// 那颗破了点赞纪录的鸡蛋（2019），平台史上最出名的帖子之一，不会被删。
+/// 机房 IP 常被 media/info 接口挡，挡了会退到 OG 标签兜底，所以这里只要求
+/// "拿得到东西"，不要求多图和档位。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn instagram() {
+    let info = parse("https://www.instagram.com/p/BsOGulcndj-/").await;
+    assert_usable(&info);
+}
+
+/// 2014 年奥斯卡那张自拍，转发量常年排前几，不会被删。是图片推文。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn twitter() {
+    let info = parse("https://x.com/TheEllenShow/status/440322224407314432").await;
+    assert_usable(&info);
+    assert!(!info.images.is_empty(), "这条推文带图，图集不该为空");
+    assert!(!info.author.name.is_empty(), "作者为空");
+}
+
+/// 微博视频走 h5 组件接口（`/tv/show/<oid>`），和普通博文是两条路。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn weibo_video() {
+    let info = parse("https://weibo.com/tv/show/1034:4797699866951785").await;
+    assert_usable(&info);
+    assert!(!info.title.is_empty(), "标题为空");
+}
+
+/// 普通博文（`weibo.com/<uid>/<mblogid>`），走 m 站接口。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn weibo_post() {
+    let info = parse("https://weibo.com/7827771738/N4xlMvjhI").await;
+    assert_usable(&info);
+    assert!(!info.author.name.is_empty(), "作者为空");
+}
+
 /// 不存在的内容要报 `deleted`，不能报成"解析器过期"。
 #[tokio::test]
 #[ignore = "要联网"]

@@ -213,22 +213,23 @@ async fn tiktok() {
     );
 }
 
-/// 2013 年的老视频帖。机房 IP 常被 media/info 接口挡，挡了会退到 OG 标签兜底，
-/// 所以这里只要求"拿得到东西"，不要求多图和档位。
+/// 那颗破了点赞纪录的鸡蛋（2019），平台史上最出名的帖子之一，不会被删。
+/// 机房 IP 常被 media/info 接口挡，挡了会退到 OG 标签兜底，所以这里只要求
+/// "拿得到东西"，不要求多图和档位。
 #[tokio::test]
 #[ignore = "要联网"]
 async fn instagram() {
-    let info = parse("https://www.instagram.com/p/aye83DjauH/").await;
+    let info = parse("https://www.instagram.com/p/BsOGulcndj-/").await;
     assert_usable(&info);
 }
 
-/// 星战官号 2015 年的预告片推文，带视频。
+/// 2014 年奥斯卡那张自拍，转发量常年排前几，不会被删。是图片推文。
 #[tokio::test]
 #[ignore = "要联网"]
 async fn twitter() {
-    let info = parse("https://x.com/starwars/status/665052190608723968").await;
+    let info = parse("https://x.com/TheEllenShow/status/440322224407314432").await;
     assert_usable(&info);
-    assert!(!info.video_url.is_empty(), "这条推文带视频，不该只拿到图");
+    assert!(!info.images.is_empty(), "这条推文带图，图集不该为空");
     assert!(!info.author.name.is_empty(), "作者为空");
 }
 

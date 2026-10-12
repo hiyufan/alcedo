@@ -74,7 +74,9 @@ async fn gql(http: &Http, body: serde_json::Value) -> Result<serde_json::Value> 
                 .header("Client-ID", CLIENT_ID)
                 .header("User-Agent", ua::pick(ua::Platform::Desktop))
                 .header("Accept", "application/json")
-                .json_body(&body),
+                .json_body(&body)
+                // 这里只发查询，不发 mutation
+                .idempotent(),
         )
         .await?;
     resp.error_for_status()?;

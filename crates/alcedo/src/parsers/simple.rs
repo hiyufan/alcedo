@@ -78,7 +78,8 @@ pub async fn zuiyou_id(http: &Http, id: &str) -> Result<VideoInfo> {
     let resp = http
         .send(
             Req::post("https://share.xiaochuankeji.cn/planck/share/post/detail_h5")
-                .json_body(&body),
+                .json_body(&body)
+                .idempotent(),
         )
         .await?;
     resp.error_for_status()?;
@@ -179,7 +180,8 @@ pub async fn pipigaoxiao_id(http: &Http, id: &str) -> Result<VideoInfo> {
                 .referer(api)
                 .header("Content-Type", "text/plain;charset=UTF-8")
                 .header("User-Agent", ua::pick(ua::Platform::Desktop))
-                .body(format!(r#"{{"pid":{pid},"type":"post","mid":null}}"#)),
+                .body(format!(r#"{{"pid":{pid},"type":"post","mid":null}}"#))
+                .idempotent(),
         )
         .await?;
     resp.error_for_status()?;

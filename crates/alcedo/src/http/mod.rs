@@ -248,6 +248,8 @@ pub struct Req {
     cookies: Vec<(String, String)>,
     /// 只取前 N 字节就断开，不算错。见 [`Req::head_bytes`]。
     head_bytes: Option<usize>,
+    /// 带 body 但重发安全。见 [`Req::idempotent`]。
+    idempotent: bool,
 }
 
 impl Req {
@@ -261,6 +263,7 @@ impl Req {
             follow: true,
             cookies: Vec::new(),
             head_bytes: None,
+            idempotent: false,
         }
     }
 
@@ -332,6 +335,21 @@ impl Req {
     pub fn form_body(self, raw: impl Into<Vec<u8>>) -> Self {
         self.header("Content-Type", "application/x-www-form-urlencoded")
             .body(raw)
+    }
+
+    /// 声明这个带 body 的请求重发安全，网络类错误时可以像 GET 一样重试一次。
+    ///
+    /// 默认不重试 POST，是怕在对面产生第二条记录。但不少平台把只读查询做成
+    /// POST（GraphQL、InnerTube、表单式查询接口），这类请求重发没有副作用，
+    /// 不重试反而让一次网络抖动直接变成用户看到的失败。
+    pub fn idempotent(mut self) -> Self {
+        self.idempotent = true;
+        self
+    }
+
+    /// 网络类错误时能不能重发。
+    fn retry_safe(&self) -> bool {
+        self.body.is_none() || self.idempotent
     }
 
     /// 不跟重定向——调用方要自己读 `Location`。
@@ -549,8 +567,9 @@ impl Http {
         loop {
             match self.send_hedged(&req).await {
                 Ok(r) => return Ok(r),
-                Err(e) if attempt == 0 && e.reason.is_retryable() && req.body.is_none() => {
-                    // 只重试幂等请求。POST 重发可能在对面产生第二条记录。
+                Err(e) if attempt == 0 && e.reason.is_retryable() && req.retry_safe() => {
+                    // 只重试幂等请求。POST 重发可能在对面产生第二条记录，
+                    // 除非调用方用 Req::idempotent 声明过它只是查询。
                     attempt += 1;
                     tokio::time::sleep(Duration::from_millis(150)).await;
                     tracing::debug!(url = %req.url, error = %e, "请求失败, 重试一次");
@@ -835,6 +854,18 @@ mod tests {
         let out = read_capped(resp, 1024 * 1024, Some(32)).await.unwrap();
         assert_eq!(out.len(), 32, "应当截断到上限, 而不是报错");
         assert!(out.starts_with(b"<html><head><title>OK"));
+    }
+
+    #[test]
+    fn only_bodyless_or_declared_idempotent_requests_retry() {
+        assert!(Req::get("https://a.example/").retry_safe());
+        // 带 body 的默认不重发：可能在对面多出一条记录
+        assert!(!Req::post("https://a.example/").body("x").retry_safe());
+        // 声明过只是查询的 POST 可以重发
+        assert!(Req::post("https://a.example/")
+            .form_body("x")
+            .idempotent()
+            .retry_safe());
     }
 
     #[tokio::test]

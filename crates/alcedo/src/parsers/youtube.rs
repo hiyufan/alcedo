@@ -145,7 +145,9 @@ async fn player(http: &Http, client: &ClientSpec, video_id: &str) -> Result<Valu
         .header("X-YouTube-Client-Version", client.version)
         .header("Origin", "https://www.youtube.com")
         .header("Content-Type", "application/json")
-        .json_body(&body);
+        .json_body(&body)
+        // player 接口只读
+        .idempotent();
     if let Some(c) = http.config().youtube_cookie.as_deref() {
         req = req.cookie_header(c);
     }

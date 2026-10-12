@@ -41,9 +41,11 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
 
     let resp = http
         .send(
+            // 组件接口是只读查询，只是做成了 POST
             Req::post(&api)
                 .referer(format!("https://h5.video.weibo.com/show/{video_id}"))
-                .form_body(body),
+                .form_body(body)
+                .idempotent(),
         )
         .await?;
     resp.error_for_status()?;

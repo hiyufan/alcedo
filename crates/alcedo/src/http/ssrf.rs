@@ -108,6 +108,21 @@ pub async fn check_domain(host: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// 去掉解析结果里的内网地址；一个都不剩才拒绝。
+///
+/// 只连剩下的那些地址，所以"只查 A、实际却走 AAAA 连进内网"的洞照样堵着。以前
+/// 是只要有一条内网记录就整个拒掉：开了 IPv6 的 fake-ip 代理（sing-box 默认
+/// `fc00::/18`、mihomo 默认 `fdfe:dcba:9876::/64`）会同时给一条 198.18 的 A 和
+/// 一条 ULA 的 AAAA，后者落在 fc00::/7 里，整个域名就被拒了（issue #31）。
+fn screen(host: &str, addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, String> {
+    let first_bad = addrs.iter().find(|a| is_internal(a.ip())).map(|a| a.ip());
+    let safe: Vec<SocketAddr> = addrs.into_iter().filter(|a| !is_internal(a.ip())).collect();
+    match first_bad {
+        Some(bad) if safe.is_empty() => Err(format!("{host} 解析到内网地址 {bad}，已拒绝")),
+        _ => Ok(safe),
+    }
+}
+
 // ------------------------------------------------------------------ resolver
 
 const CACHE_TTL: Duration = Duration::from_secs(300);
@@ -199,15 +214,11 @@ impl Resolve for SafeResolver {
                     "DNS 没有返回任何地址: {host}"
                 )));
             }
-            if enforce {
-                // 必须查全部记录：只看 A 会漏掉 AAAA 指向内网的情况，那就是个洞。
-                if let Some(bad) = addrs.iter().find(|a| is_internal(a.ip())) {
-                    return Err(Box::<dyn std::error::Error + Send + Sync>::from(format!(
-                        "{host} 解析到内网地址 {}，已拒绝",
-                        bad.ip()
-                    )));
-                }
-            }
+            let addrs = if enforce {
+                screen(&host, addrs).map_err(Box::<dyn std::error::Error + Send + Sync>::from)?
+            } else {
+                addrs
+            };
             let shared = Arc::new(addrs);
             store(&cache, host, Arc::clone(&shared));
             let addrs: Addrs = Box::new(shared.as_ref().clone().into_iter());
@@ -221,6 +232,29 @@ impl Resolve for SafeResolver {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    fn sock(ip: &str) -> SocketAddr {
+        SocketAddr::new(ip.parse().unwrap(), 443)
+    }
+
+    #[test]
+    fn mixed_records_keep_only_public_ones() {
+        // 开了 IPv6 的 fake-ip：198.18 的 A + ULA 的 AAAA，以前整个域名被拒
+        for v6 in ["fdfe:dcba:9876::5", "fc00::5"] {
+            let got = screen("www.bilibili.com", vec![sock("198.18.0.5"), sock(v6)]).unwrap();
+            assert_eq!(got, vec![sock("198.18.0.5")], "{v6}");
+        }
+        // 公网 + 内网混着：只留公网的，连接永远不会走到内网那条
+        let got = screen("x.example", vec![sock("::1"), sock("93.184.216.34")]).unwrap();
+        assert_eq!(got, vec![sock("93.184.216.34")]);
+    }
+
+    #[test]
+    fn all_internal_records_are_rejected() {
+        let err = screen("evil.example", vec![sock("10.0.0.1"), sock("fd00::1")]).unwrap_err();
+        assert!(err.contains("10.0.0.1"), "{err}");
+        assert!(err.contains("已拒绝"), "{err}");
+    }
 
     #[test]
     fn blocks_private_and_metadata() {

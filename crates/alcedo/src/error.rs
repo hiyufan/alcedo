@@ -159,7 +159,7 @@ impl From<reqwest::Error> for Error {
             return Error::bare(Reason::Timeout);
         }
         if e.is_connect() || e.is_request() {
-            return Error::new(Reason::Network, truncate(&e.to_string(), 80));
+            return Error::new(Reason::Network, network_detail(&e));
         }
         if let Some(status) = e.status() {
             return from_status(status.as_u16());
@@ -168,6 +168,25 @@ impl From<reqwest::Error> for Error {
             return Error::parse(truncate(&e.to_string(), 100));
         }
         Error::new(Reason::Network, truncate(&e.to_string(), 80))
+    }
+}
+
+/// 网络错误的说明里要有最底层的原因。
+///
+/// reqwest 自己的 Display 只有 "error sending request for url (…)"，真正的原因
+/// （DNS 失败、连接被拒、SSRF 拦截）在 source 链的最里层。以前只截了外层前 80 个
+/// 字，"解析到内网地址 …，已拒绝"整个丢了，下游只能看到"连不上"（issue #31）。
+fn network_detail(e: &reqwest::Error) -> String {
+    let mut root: &dyn std::error::Error = e;
+    while let Some(next) = root.source() {
+        root = next;
+    }
+    let root = root.to_string();
+    let outer = e.to_string();
+    if root == outer {
+        truncate(&outer, 80)
+    } else {
+        truncate(&root, 120)
     }
 }
 

@@ -280,6 +280,16 @@ Douyin can use an external signer; see the [configuration and JSON protocol](doc
 When a signer is unset or fails, extraction continues without its signature.
 Whether the request succeeds still depends on the platform response.
 
+Addresses that resolve to private networks are blocked at the DNS layer (SSRF
+protection). Private records are dropped from the answer and only the remaining
+public addresses are used; a host is rejected only when every record is private.
+Fake-ip proxies such as Clash, Surge, sing-box and mihomo (`198.18.0.0/15`, plus
+ULA AAAA records when IPv6 is on, e.g. sing-box's default `fc00::/18` and
+mihomo's `fdfe:dcba:9876::/64`) do **not** need this check disabled. Set
+`ALCEDO_SSRF_DNS=0` only when platform domains really resolve to private
+addresses (self-hosted mirrors, split-horizon DNS). A blocked request reports
+"resolved to an internal address" in its error message.
+
 See the [design notes](docs/design.en.md) for connection reuse, platform dispatch
 and address checks.
 

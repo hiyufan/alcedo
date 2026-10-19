@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::error::{Error, Reason, Result};
 use crate::http::identity::IdentitySlot;
 use crate::http::{ua, Http, Req};
-use crate::model::{short_side, Author, Format, VideoInfo};
+use crate::model::{short_side, Author, Format, Image, VideoInfo};
 use crate::util;
 
 const REFERER: &str = "https://www.bilibili.com/";
@@ -23,8 +23,142 @@ static BUVID: IdentitySlot = IdentitySlot::new(Duration::from_secs(3600));
 
 /// 解析一条哔哩哔哩分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
-    let (bvid, page) = bvid_from_url(http, url).await?;
-    parse_part(http, &bvid, page).await
+    match target_from_url(http, url).await? {
+        Target::Video { id, page } => parse_part(http, &id, page).await,
+        Target::Opus(id) => parse_opus(http, &id).await,
+    }
+}
+
+/// 链接指向的是什么。
+#[derive(Debug, PartialEq)]
+enum Target {
+    /// 视频：BV 号或 av 号，加分 P 序号（从 1 数）
+    Video { id: String, page: u32 },
+    /// 动态（图文 / 实况）：`bilibili.com/opus/<id>`、`t.bilibili.com/<id>`
+    Opus(String),
+}
+
+/// 动态 ID：15 位以上的纯数字。
+fn opus_id(url: &url::Url) -> Option<String> {
+    let mut segs = url.path_segments()?.filter(|s| !s.is_empty());
+    let first = segs.next()?;
+    let id = if url.host_str() == Some("t.bilibili.com") {
+        first
+    } else if first == "opus" {
+        segs.next()?
+    } else {
+        return None;
+    };
+    (id.len() >= 15 && id.bytes().all(|b| b.is_ascii_digit())).then(|| id.to_owned())
+}
+
+/// 动态（opus）：图片和实况在 `opus/detail` 里，每张图的 `live_url` 就是实况视频。
+/// 没图的多半是转发视频的动态，交给视频那条路。
+async fn parse_opus(http: &Http, opus_id: &str) -> Result<VideoInfo> {
+    let http = http.clone().with_fixed_ua(ua::DESKTOP_FIXED);
+    let cookie = ensure_buvid(&http).await;
+    let cookie = cookie.as_deref();
+
+    let url = format!("https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?id={opus_id}");
+    let resp = api_get(&http, &url, cookie).await?;
+    let code = util::i64_at(&resp, &["code"]);
+    if code != 0 {
+        return Err(Error::restricted(format!(
+            "B 站动态接口 code={code} {}",
+            util::str_at(&resp, &["message"])
+        )));
+    }
+    // 删了 / 不存在的动态照样 code=0，只是 item 为 null
+    let item = util::get(&resp, &["data", "item"])
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| Error::deleted("B 站没有这条动态"))?;
+
+    let mut info = opus_info(item);
+    if info.images.is_empty() {
+        let url = format!("https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id={opus_id}");
+        let detail = api_get(&http, &url, cookie).await?;
+        let bvid = util::str_at(
+            &detail,
+            &[
+                "data",
+                "item",
+                "modules",
+                "module_dynamic",
+                "major",
+                "archive",
+                "bvid",
+            ],
+        );
+        if bvid.is_empty() {
+            return Err(Error::bare(Reason::Empty));
+        }
+        return parse_part(&http, &bvid, 1).await;
+    }
+    info.page_url = format!("https://www.bilibili.com/opus/{opus_id}");
+    info.set_header("Referer", REFERER);
+    info.set_header("User-Agent", ua::DESKTOP_FIXED);
+    Ok(info)
+}
+
+/// `opus/detail` 的 item → 结果。`modules` 是 `{module_type, module_xxx}` 的数组。
+fn opus_info(item: &Value) -> VideoInfo {
+    let module = |ty: &str| {
+        util::arr_at(item, &["modules"])
+            .iter()
+            .find(|m| util::str_at(m, &["module_type"]) == ty)
+            .unwrap_or(&util::NULL)
+    };
+    let top = module("MODULE_TYPE_TOP");
+    let content = module("MODULE_TYPE_CONTENT");
+    let author = util::get_or_null(module("MODULE_TYPE_AUTHOR"), &["module_author"]);
+    let paragraphs = util::arr_at(content, &["module_content", "paragraphs"]);
+
+    // 顶部的图集加正文段落里的图。原图就是不带 @ 参数的地址
+    let mut pics: Vec<&Value> = util::arr_at(top, &["module_top", "display", "album", "pics"])
+        .iter()
+        .collect();
+    for para in paragraphs {
+        pics.extend(util::arr_at(para, &["pic", "pics"]));
+    }
+    let images: Vec<Image> = pics
+        .into_iter()
+        .filter_map(|p| {
+            let url = https(&util::str_at(p, &["url"]));
+            (!url.is_empty()).then(|| Image {
+                url,
+                live_photo_url: https(&util::str_at(p, &["live_url"])),
+            })
+        })
+        .collect();
+
+    let text: String = paragraphs
+        .iter()
+        .flat_map(|para| util::arr_at(para, &["text", "nodes"]))
+        .map(|node| util::str_at(node, &["word", "words"]))
+        .collect();
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title = if text.is_empty() {
+        util::str_at(item, &["basic", "title"])
+    } else {
+        text.chars().take(60).collect()
+    };
+
+    VideoInfo {
+        cover_url: images.first().map(|i| i.url.clone()).unwrap_or_default(),
+        title,
+        images,
+        author: Author::new(
+            util::id_at(author, &["mid"]),
+            util::str_at(author, &["name"]),
+            util::str_at(author, &["face"]),
+        ),
+        ..Default::default()
+    }
+}
+
+fn https(url: &str) -> String {
+    url.strip_prefix("http://")
+        .map_or_else(|| url.to_owned(), |rest| format!("https://{rest}"))
 }
 
 /// 已知哔哩哔哩作品 ID 时直接解析（第一 P）。
@@ -173,14 +307,14 @@ fn page_number(url: &url::Url) -> u32 {
         .unwrap_or(1)
 }
 
-/// 从各种 B 站地址里拿到 BV 号和分 P 序号。
-async fn bvid_from_url(http: &Http, url: &str) -> Result<(String, u32)> {
+/// 从各种 B 站地址里认出是视频（BV 号 + 分 P 序号）还是动态。
+async fn target_from_url(http: &Http, url: &str) -> Result<Target> {
     let host = util::host_of(url).unwrap_or_default();
 
     // 短链：b23.tv / bili2233.cn
     if host.ends_with("b23.tv") || host.ends_with("bili2233.cn") {
         let location = http.resolve_redirect(url).await?;
-        return Box::pin(bvid_from_url(http, &location)).await;
+        return Box::pin(target_from_url(http, &location)).await;
     }
 
     let parsed = url::Url::parse(url)?;
@@ -192,18 +326,27 @@ async fn bvid_from_url(http: &Http, url: &str) -> Result<(String, u32)> {
             "B 站番剧、电影、纪录片和课程是版权内容，不支持解析",
         ));
     }
+    if let Some(id) = opus_id(&parsed) {
+        return Ok(Target::Opus(id));
+    }
     if let Some(seg) = parsed
         .path_segments()
         .and_then(|mut s| s.find(|p| p.starts_with("BV") || p.starts_with("bv")))
     {
-        return Ok((seg.to_owned(), page_number(&parsed)));
+        return Ok(Target::Video {
+            id: seg.to_owned(),
+            page: page_number(&parsed),
+        });
     }
     // /video/av170001 这种老地址
     if let Some(av) = parsed.path_segments().and_then(|mut s| {
         // len > 2：裸 "av" 段（p[2..] 为空、all() 对空迭代器返回 true）不该被当成 ID
         s.find(|p| p.len() > 2 && p.starts_with("av") && p[2..].bytes().all(|b| b.is_ascii_digit()))
     }) {
-        return Ok((av.to_owned(), page_number(&parsed)));
+        return Ok(Target::Video {
+            id: av.to_owned(),
+            page: page_number(&parsed),
+        });
     }
     Err(Error::unsupported("不是有效的 B 站视频链接（没有 BV 号）"))
 }
@@ -553,6 +696,64 @@ mod tests {
         assert!(dash_formats(&data).is_empty());
     }
 
+    fn video(id: &str, page: u32) -> Target {
+        Target::Video {
+            id: id.to_owned(),
+            page,
+        }
+    }
+
+    #[test]
+    fn opus_images_live_photos_and_text() {
+        let item = json!({
+            "basic": {"title": "备用标题"},
+            "modules": [
+                {"module_type": "MODULE_TYPE_AUTHOR",
+                 "module_author": {"mid": 42, "name": "UP 主", "face": "https://i0.hdslb.com/f.jpg"}},
+                {"module_type": "MODULE_TYPE_TOP",
+                 "module_top": {"display": {"album": {"pics": [
+                     {"url": "http://i0.hdslb.com/bfs/new_dyn/a.jpg",
+                      "live_url": "http://i0.hdslb.com/bfs/live/a.mov"}
+                 ]}}}},
+                {"module_type": "MODULE_TYPE_CONTENT",
+                 "module_content": {"paragraphs": [
+                     {"text": {"nodes": [{"word": {"words": "今天的  "}}, {"word": {"words": "实况"}}]}},
+                     {"pic": {"pics": [{"url": "https://i0.hdslb.com/bfs/new_dyn/b.jpg"}]}}
+                 ]}}
+            ]
+        });
+        let info = opus_info(&item);
+        assert_eq!(info.images.len(), 2);
+        assert_eq!(info.images[0].url, "https://i0.hdslb.com/bfs/new_dyn/a.jpg");
+        assert_eq!(
+            info.images[0].live_photo_url,
+            "https://i0.hdslb.com/bfs/live/a.mov"
+        );
+        assert!(info.images[1].live_photo_url.is_empty());
+        assert_eq!(info.title, "今天的 实况");
+        assert_eq!(info.author.name, "UP 主");
+        assert_eq!(info.author.uid, "42");
+        assert_eq!(info.cover_url, info.images[0].url);
+    }
+
+    #[test]
+    fn opus_without_text_falls_back_to_basic_title() {
+        let item = json!({"basic": {"title": "备用标题"}, "modules": []});
+        assert_eq!(opus_info(&item).title, "备用标题");
+    }
+
+    #[test]
+    fn opus_ids_need_15_digits() {
+        let parse = |u: &str| opus_id(&url::Url::parse(u).unwrap());
+        assert_eq!(
+            parse("https://t.bilibili.com/1012345678901234567").as_deref(),
+            Some("1012345678901234567")
+        );
+        assert_eq!(parse("https://www.bilibili.com/opus/123"), None);
+        assert_eq!(parse("https://www.bilibili.com/video/BV1xx411c7mD"), None);
+        assert_eq!(parse("https://t.bilibili.com/"), None);
+    }
+
     #[test]
     fn selected_part_and_its_title() {
         let pages = vec![
@@ -582,7 +783,7 @@ mod tests {
             "https://m.bilibili.com/bangumi/play/ss4321",
             "https://www.bilibili.com/cheese/play/ep99",
         ] {
-            let err = bvid_from_url(&http, u).await.unwrap_err();
+            let err = target_from_url(&http, u).await.unwrap_err();
             assert_eq!(err.reason, Reason::Unsupported, "{u}");
         }
     }
@@ -595,39 +796,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            bvid_from_url(&http, "https://www.bilibili.com/video/BV1xx411c7mD/?spm=1")
+            target_from_url(&http, "https://www.bilibili.com/video/BV1xx411c7mD/?spm=1")
                 .await
                 .unwrap(),
-            ("BV1xx411c7mD".to_owned(), 1)
+            video("BV1xx411c7mD", 1)
         );
         assert_eq!(
-            bvid_from_url(&http, "https://m.bilibili.com/video/av170001")
+            target_from_url(&http, "https://m.bilibili.com/video/av170001")
                 .await
                 .unwrap(),
-            ("av170001".to_owned(), 1)
+            video("av170001", 1)
         );
         // 多 P：链接里的 ?p= 要带下去，不合法的按第一 P
         assert_eq!(
-            bvid_from_url(
+            target_from_url(
                 &http,
                 "https://www.bilibili.com/video/BV1xx411c7mD?p=13&spm=1"
             )
             .await
             .unwrap(),
-            ("BV1xx411c7mD".to_owned(), 13)
+            video("BV1xx411c7mD", 13)
         );
         assert_eq!(
-            bvid_from_url(&http, "https://www.bilibili.com/video/BV1xx411c7mD?p=0")
+            target_from_url(&http, "https://www.bilibili.com/video/BV1xx411c7mD?p=0")
                 .await
-                .unwrap()
-                .1,
-            1
+                .unwrap(),
+            video("BV1xx411c7mD", 1)
         );
-        assert!(bvid_from_url(&http, "https://www.bilibili.com/read/cv123")
-            .await
-            .is_err());
+        // 动态
+        for u in [
+            "https://www.bilibili.com/opus/1012345678901234567",
+            "https://m.bilibili.com/opus/1012345678901234567?spm=x",
+            "https://t.bilibili.com/1012345678901234567",
+        ] {
+            assert_eq!(
+                target_from_url(&http, u).await.unwrap(),
+                Target::Opus("1012345678901234567".into()),
+                "{u}"
+            );
+        }
+        assert!(
+            target_from_url(&http, "https://www.bilibili.com/read/cv123")
+                .await
+                .is_err()
+        );
         // 裸 "av" 段不是 ID（空串对 all() 返回 true 的老坑），该报"没有 BV 号"
-        assert!(bvid_from_url(&http, "https://www.bilibili.com/video/av")
+        assert!(target_from_url(&http, "https://www.bilibili.com/video/av")
             .await
             .is_err());
     }

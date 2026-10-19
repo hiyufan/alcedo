@@ -43,7 +43,8 @@ async fn from_page(http: &Http, page_url: &str) -> Result<VideoInfo> {
     let resp = http
         .send(
             Req::get(page_url)
-                .header("User-Agent", ua::pick(ua::Platform::Desktop))
+                // 和直链请求头里的 UA 保持一致：页面种下的 cookie 认这个 UA
+                .header("User-Agent", ua::DESKTOP_FIXED)
                 .referer(WEB_REFERER)
                 .header(
                     "Accept",
@@ -52,6 +53,9 @@ async fn from_page(http: &Http, page_url: &str) -> Result<VideoInfo> {
         )
         .await?;
     resp.error_for_status()?;
+    // 作品页种下的 cookie（tt_chain_token 等）直链也要：缺了它 CDN 一律 403
+    // （实网冒烟 2026-10-19：只带 Referer + UA 时直链 403；求原图 10-11 起也是这样）
+    let page_cookies = cookie_line(&resp.set_cookies());
     let html = resp.text();
 
     let raw = util::script_by_id(&html, "__UNIVERSAL_DATA_FOR_REHYDRATION__")
@@ -75,8 +79,21 @@ async fn from_page(http: &Http, page_url: &str) -> Result<VideoInfo> {
     // 直链要带这些头才不 403
     info.set_header("Referer", WEB_REFERER);
     info.set_header("User-Agent", ua::DESKTOP_FIXED);
+    if !page_cookies.is_empty() {
+        info.set_header("Cookie", page_cookies);
+    }
     info.page_url = page_url.to_owned();
     Ok(info)
+}
+
+/// `Set-Cookie` 拆出来的键值对拼回 `Cookie:` 请求头那一行。
+fn cookie_line(cookies: &[(String, String)]) -> String {
+    cookies
+        .iter()
+        .filter(|(k, v)| !k.is_empty() && !v.is_empty())
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn build(item: &Value) -> VideoInfo {
@@ -193,6 +210,17 @@ fn block_error(html: &str) -> Error {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookie_line_joins_pairs_and_skips_empty() {
+        let got = cookie_line(&[
+            ("tt_chain_token".into(), "abc".into()),
+            ("ttwid".into(), String::new()),
+            ("msToken".into(), "x-y".into()),
+        ]);
+        assert_eq!(got, "tt_chain_token=abc; msToken=x-y");
+        assert_eq!(cookie_line(&[]), "");
+    }
     use serde_json::json;
 
     #[test]

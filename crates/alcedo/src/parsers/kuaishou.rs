@@ -233,6 +233,11 @@ fn build(state: &Value) -> Result<VideoInfo> {
                 &["webpCoverUrls", "0", "url"],
             ],
         ),
+        notice: if single && is_live_caption(&util::str_at(photo, &["caption"])) {
+            LIVE_NOTICE.to_owned()
+        } else {
+            String::new()
+        },
         title: util::str_at(photo, &["caption"]),
         music_url,
         images,
@@ -283,6 +288,16 @@ fn manifest_formats(photo: &Value, video_url: &str) -> Vec<Format> {
         });
     }
     formats
+}
+
+/// 快手实况：分享页数据里只有照片和配乐（字段和普通单图作品一模一样），会动的那段
+/// 分享页根本不放，网页版接口又要过滑块验证码（求原图 2026-10 实测）。只能从标题里的
+/// 话题认出来，提醒用户一句，免得以为是漏了。
+const LIVE_NOTICE: &str =
+    "这是快手实况：快手只对外提供照片和配乐，会动的部分拿不到。要完整的实况，请在快手 App 里保存。";
+
+fn is_live_caption(caption: &str) -> bool {
+    caption.contains("实况") || caption.to_ascii_lowercase().contains("live")
 }
 
 /// 图集的一张。路径自带前导 `/`，直接拼会多出一个斜杠；`atlas.list` 给的是 `.webp`，
@@ -483,6 +498,26 @@ mod tests {
         assert!(!info.is_empty(), "单图作品不该报没有内容");
         assert_eq!(info.images[0].url, "https://p2.a.yximgs.com/upic/x.jpg");
         assert_eq!(info.music_url, "https://m.a.yximgs.com/bs2/music/s.m4a");
+    }
+
+    #[test]
+    fn live_photo_single_picture_gets_a_notice() {
+        let photo = |caption: &str| {
+            state_with(
+                json!({
+                    "photoType": "SINGLE_PICTURE",
+                    "caption": caption,
+                    "coverUrls": [{"url": "https://p2.a.yximgs.com/upic/x.jpg"}]
+                }),
+                1,
+            )
+        };
+        assert!(build(&photo("周末 #实况照片"))
+            .unwrap()
+            .notice
+            .contains("实况"));
+        assert!(!build(&photo("#Live 生活")).unwrap().notice.is_empty());
+        assert!(build(&photo("普通单图")).unwrap().notice.is_empty());
     }
 
     #[test]

@@ -24,7 +24,7 @@
 //! 优先取 `ALCEDO_MEDIA_SECRET`，没配就进程启动时随机生成（重启后旧签名
 //! 全部失效；要跨重启有效就显式配一个）。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -121,6 +121,49 @@ struct AppState {
     stats: Stats,
     /// /media 的转发槽
     media_streams: Arc<Semaphore>,
+    /// 解析时记下的直链请求头，/media 转发时带上
+    media_headers: MediaHeaders,
+}
+
+/// 签名代理地址 → 解析时记下的请求头（Referer / UA / Cookie）。
+///
+/// 代理以前只按 CDN 域名补 Referer：名单外的新 CDN 一个头都不带，要 cookie 的平台
+/// （TikTok 的 tt_chain_token）一律 403。头留在服务端，cookie 不进页面；进程重启后
+/// 查不到，退回按域名补头，和以前一样。
+#[derive(Default)]
+struct MediaHeaders {
+    inner: Mutex<HashMap<String, (Headers, u64)>>,
+}
+
+/// 一条直链要带的请求头。
+type Headers = BTreeMap<String, String>;
+
+/// 记的条数上限。一条解析结果十来个地址，够几百次解析同时有效。
+const MEDIA_HEADERS_CAP: usize = 8192;
+
+impl MediaHeaders {
+    fn remember(&self, info: &VideoInfo, urls: impl Iterator<Item = String>) {
+        if info.video_headers.is_empty() {
+            return;
+        }
+        let now = unix_now();
+        let exp = now + MEDIA_TTL_SECS;
+        let mut map = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        map.retain(|_, (_, e)| *e > now);
+        for url in urls {
+            if map.len() >= MEDIA_HEADERS_CAP && !map.contains_key(&url) {
+                break;
+            }
+            map.insert(url, (info.video_headers.clone(), exp));
+        }
+    }
+
+    fn get(&self, url: &str) -> Option<Headers> {
+        let map = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        map.get(url)
+            .filter(|(_, e)| *e > unix_now())
+            .map(|(h, _)| h.clone())
+    }
 }
 
 /// 按平台 × 原因累计解析结果，挂在 `/health` 上。
@@ -188,6 +231,7 @@ pub(crate) async fn run(opts: Options) -> Result<(), String> {
         token: opts.token.clone(),
         stats: Stats::default(),
         media_streams: Arc::new(Semaphore::new(MAX_MEDIA_STREAMS)),
+        media_headers: MediaHeaders::default(),
     });
     let app = Router::new()
         .route("/parse", get(parse))
@@ -270,7 +314,9 @@ async fn parse(
             eprintln!("parse ok   {src:<10} {ms:>5}ms  {}", shorten(&what));
             let mut payload = serde_json::to_value(&info).expect("VideoInfo 序列化不会失败");
             if q.media == Some(1) {
-                payload["media"] = serde_json::to_value(media_map(&info)).unwrap_or_default();
+                let map = media_map(&info);
+                state.media_headers.remember(&info, map.keys().cloned());
+                payload["media"] = serde_json::to_value(map).unwrap_or_default();
             }
             Json(payload).into_response()
         }
@@ -411,9 +457,16 @@ async fn media(
         return error_response(Reason::Unsupported, "不允许的地址");
     }
 
-    let mut upstream = media::client()
-        .get(parsed)
-        .headers(media::headers_for(&q.url));
+    let mut out_headers = media::headers_for(&q.url);
+    for (k, v) in state.media_headers.get(&q.url).unwrap_or_default() {
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(&v),
+        ) {
+            out_headers.insert(name, val);
+        }
+    }
+    let mut upstream = media::client().get(parsed).headers(out_headers);
     if let Some(range) = headers.get("range").and_then(|v| v.to_str().ok()) {
         upstream = upstream.header("range", range);
     }
@@ -636,6 +689,40 @@ mod tests {
             *s,
             "round-trip 必须能验过"
         );
+    }
+
+    #[test]
+    fn media_headers_are_remembered_per_url_and_expire() {
+        let store = MediaHeaders::default();
+        let mut info = VideoInfo::default();
+        info.set_header("Cookie", "tt_chain_token=abc");
+        store.remember(&info, ["https://v16.tiktok.com/a".to_owned()].into_iter());
+        assert_eq!(
+            store
+                .get("https://v16.tiktok.com/a")
+                .unwrap()
+                .get("Cookie")
+                .map(String::as_str),
+            Some("tt_chain_token=abc")
+        );
+        assert!(store.get("https://v16.tiktok.com/other").is_none());
+
+        // 过期的查不到
+        store
+            .inner
+            .lock()
+            .unwrap()
+            .get_mut("https://v16.tiktok.com/a")
+            .unwrap()
+            .1 = 0;
+        assert!(store.get("https://v16.tiktok.com/a").is_none());
+
+        // 没有请求头的结果不占地方
+        store.remember(
+            &VideoInfo::default(),
+            ["https://x/b".to_owned()].into_iter(),
+        );
+        assert!(store.get("https://x/b").is_none());
     }
 
     #[test]

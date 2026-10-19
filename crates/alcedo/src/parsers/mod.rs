@@ -11,6 +11,7 @@ use crate::model::{Source, VideoInfo};
 pub mod acfun;
 pub mod bilibili;
 pub mod cctv;
+pub mod direct;
 pub mod douyin;
 pub mod huya;
 pub mod kuaishou;

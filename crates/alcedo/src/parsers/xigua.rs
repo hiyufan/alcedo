@@ -1,105 +1,81 @@
 //! 西瓜视频。
 //!
-//! 走抖音那套分享页接口（西瓜和抖音同属一个体系），从 `_ROUTER_DATA` 里取数据。
+//! 西瓜已并入抖音：作品 ID 就是抖音的 aweme_id，官方分享链接也换成了
+//! `www.iesdouyin.com/xg/video/<id>`。原来用的 `m.ixigua.com/douyin/share/video` 分享页
+//! 其实就是抖音分享页换了个域名，和抖音一样不再在 SSR 里渲染 `videoInfoRes`
+//! （求原图 2026-09 实测所有作品都拿不到）。取出 ID 后直接走抖音解析器，结果还多了
+//! 清晰度档位和时长。
 
 use crate::error::{Error, Result};
-use crate::http::{ua, Http, Req};
-use crate::model::{Author, VideoInfo};
+use crate::http::Http;
+use crate::model::VideoInfo;
+use crate::parsers::douyin;
 use crate::util;
 
 /// 解析一条西瓜视频分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
-    let host = util::host_of(url).unwrap_or_default();
-
-    let id = if host == "www.ixigua.com" || host == "ixigua.com" {
-        util::last_path_segment(url).ok_or_else(|| Error::unsupported("链接里没有作品 ID"))?
-    } else {
-        // v.ixigua.com 短链
-        let location = http.resolve_redirect(url).await?;
-        location
-            .split('?')
-            .next()
-            .and_then(|p| p.trim_end_matches('/').rsplit('/').next())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| Error::deleted("短链跳转后没有作品 ID"))?
-            .to_owned()
+    let id = match video_id_in(url) {
+        Some(id) => id,
+        None if util::host_of(url).as_deref() == Some("v.ixigua.com") => {
+            // 短链：不跟跳转，从 Location 里取 ID
+            let location = http.resolve_redirect(url).await?;
+            video_id_in(&location).ok_or_else(|| Error::deleted("西瓜短链没有跳转到作品页"))?
+        }
+        None => return Err(Error::unsupported("链接里没有西瓜视频的作品 ID")),
     };
-
     parse_id(http, &id).await
 }
 
 /// 已知西瓜视频作品 ID 时直接解析。
 pub async fn parse_id(http: &Http, id: &str) -> Result<VideoInfo> {
-    // 注意：地址里 video_id 后面不能有斜杠，否则返回的结构不一样
-    let api = format!(
-        "https://m.ixigua.com/douyin/share/video/{id}\
-         ?aweme_type=107&schema_type=1&utm_source=copy&utm_campaign=client_share\
-         &utm_medium=android&app=aweme"
-    );
+    douyin::parse_id(http, id).await
+}
 
-    let resp = http
-        .send(Req::get(&api).header("User-Agent", ua::pick(ua::Platform::Android)))
-        .await?;
-    resp.error_for_status()?;
-    let html = resp.text();
-
-    let raw = util::json_after(&html, "window._ROUTER_DATA")
-        .ok_or_else(|| Error::parse("页面里没有 _ROUTER_DATA"))?;
-    let json: serde_json::Value = serde_json::from_str(util::undefined_to_null(raw).as_ref())?;
-
-    let info = util::get(&json, &["loaderData", "video_(id)/page", "videoInfoRes"])
-        .ok_or_else(|| Error::parse("_ROUTER_DATA 里没有 videoInfoRes"))?;
-
-    let items = util::arr_at(info, &["item_list"]);
-    let Some(data) = items.first() else {
-        let msg = util::str_at(info, &["filter_list", "0", "detail_msg"]);
-        return Err(if msg.is_empty() {
-            Error::deleted("页面里没有作品数据")
-        } else {
-            Error::restricted(msg)
-        });
-    };
-
-    let play = util::get_or_null(data, &["video", "play_addr"]);
-    let video_url = util::str_at(play, &["url_list", "0"]).replace("playwm", "play");
-    if video_url.is_empty() {
-        return Err(Error::parse("没有取到播放地址"));
-    }
-
-    Ok(VideoInfo {
-        video_url,
-        cover_url: util::prefer_non_webp(util::arr_at(data, &["video", "cover", "url_list"])),
-        title: util::str_at(data, &["desc"]),
-        duration: util::num_at(data, &["video", "duration"]) / 1000.0,
-        width: util::u32_at(play, &["width"]),
-        height: util::u32_at(play, &["height"]),
-        author: Author::new(
-            util::first_str(data, &[&["author", "unique_id"], &["author", "sec_uid"]]),
-            util::str_at(data, &["author", "nickname"]),
-            util::str_at(data, &["author", "avatar_thumb", "url_list", "0"]),
-        ),
-        ..Default::default()
-    })
+/// 路径里从后往前第一个纯数字段就是作品 ID。
+///
+/// `www.ixigua.com/<id>`、`m.ixigua.com/video/<id>/`、`www.iesdouyin.com/xg/video/<id>/`
+/// 都是这个形状；短链跳到首页 / 活动页这类地址时返回 `None`，别拿别的段瞎猜。
+fn video_id_in(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()?
+        .path_segments()?
+        .filter(|s| !s.is_empty())
+        .rfind(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
-// 断言里比较确切的期望值是对的，浮点相等在这儿不是隐患
-#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn id_from_every_url_shape() {
+        for url in [
+            "https://www.ixigua.com/7234567890123456789",
+            "https://www.ixigua.com/7234567890123456789?logTag=abc",
+            "https://m.ixigua.com/video/7234567890123456789/",
+            "https://www.iesdouyin.com/xg/video/7234567890123456789/",
+        ] {
+            assert_eq!(
+                video_id_in(url).as_deref(),
+                Some("7234567890123456789"),
+                "{url}"
+            );
+        }
+        assert_eq!(video_id_in("https://www.ixigua.com/"), None);
+        assert_eq!(video_id_in("https://v.ixigua.com/iRkb8xYp/"), None);
+    }
+
     #[tokio::test]
-    async fn pc_url_gives_id_without_network() {
+    async fn non_video_page_is_unsupported_without_network() {
         let http = Http::new(
             std::sync::Arc::new(crate::Config::default()),
             Some(crate::Source::XiGua),
         )
         .unwrap();
-        // 只跑到取 ID 那一步就够: 真正发请求会失败, 但 ID 解析路径已覆盖
-        let _ = &http;
-        assert_eq!(
-            util::last_path_segment("https://www.ixigua.com/7234567890123456789").as_deref(),
-            Some("7234567890123456789")
-        );
+        let err = parse(&http, "https://www.ixigua.com/channel/game")
+            .await
+            .unwrap_err();
+        assert_eq!(err.reason, crate::Reason::Unsupported);
     }
 }

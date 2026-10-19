@@ -336,6 +336,9 @@ static ID_QUERY_PARAMS: &[(Source, &str)] = &[
     (Source::DouPai, "id"),
     (Source::ZuiYou, "pid"),
     (Source::QuanMinKGe, "s"),
+    // 多 P 视频的分 P 序号：剥掉它第 13 P 就会命中第一 P 的缓存
+    (Source::BiliBili, "p"),
+    (Source::LiShiPin, "contId"),
 ];
 
 /// 这个平台的 query 里有没有装作品 ID 的这个参数。
@@ -394,6 +397,17 @@ mod tests {
         );
         let e = cache_key(Source::DouYin, "https://www.douyin.com/video/123");
         assert_eq!(d, e);
+
+        // B 站分 P 是不同的内容
+        let p1 = cache_key(
+            Source::BiliBili,
+            "https://www.bilibili.com/video/BV1x?spm=1",
+        );
+        let p13 = cache_key(
+            Source::BiliBili,
+            "https://www.bilibili.com/video/BV1x?p=13&spm=1",
+        );
+        assert_ne!(p1, p13, "第 13 P 不能拿到第一 P 的缓存");
     }
 
     #[tokio::test]

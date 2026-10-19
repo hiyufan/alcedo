@@ -17,7 +17,9 @@ static DOMAINS: &[(&str, Source)] = &[
     ("chenzhongtech.com", Source::KuaiShou),
     ("pipix.com", Source::PiPiXia),
     ("weibo.com", Source::WeiBo),
-    ("weibo.cn", Source::LvZhou),
+    // m.weibo.cn 是微博手机站。绿洲（已停运）只占 oasis.weibo.cn，以前登记成整个
+    // weibo.cn，把微博手机链接全抢走了
+    ("weibo.cn", Source::WeiBo),
     ("oasis.weibo.cn", Source::LvZhou),
     ("t.cn", Source::WeiBo),
     ("weishi.qq.com", Source::WeiShi),
@@ -220,6 +222,14 @@ mod tests {
             detect("https://m.oasis.weibo.cn/v1/h5/share?sid=1"),
             Some(Source::LvZhou)
         );
+        // 微博手机站的三种作品链接
+        for u in [
+            "https://m.weibo.cn/status/4189191225395228",
+            "https://m.weibo.cn/detail/4189191225395228",
+            "https://m.weibo.cn/7827771738/N4xlMvjhI",
+        ] {
+            assert_eq!(detect(u), Some(Source::WeiBo), "{u}");
+        }
     }
 
     #[test]

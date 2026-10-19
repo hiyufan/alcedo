@@ -242,6 +242,15 @@ async fn weibo_video() {
     assert!(!info.title.is_empty(), "标题为空");
 }
 
+/// 微博手机站链接。以前 `weibo.cn` 整个登记给了绿洲（已停运），m.weibo.cn 的链接全被分错。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn weibo_mobile() {
+    let info = parse("https://m.weibo.cn/7827771738/N4xlMvjhI").await;
+    assert_usable(&info);
+    assert!(!info.author.name.is_empty(), "作者为空");
+}
+
 /// 普通博文（`weibo.com/<uid>/<mblogid>`），走 m 站接口。
 #[tokio::test]
 #[ignore = "要联网"]

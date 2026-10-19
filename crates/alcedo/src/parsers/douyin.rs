@@ -26,22 +26,22 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
                 identity::bytedance_ttwid(http).await;
             }
         });
-        let location = location?;
-        // 抖音的分享链接有时会跳到西瓜视频, 那边拿不到 aweme_id。
-        // 早先这里返回空字符串, 上层统一报 "Failed to parse video ID", 被归类成
-        // deleted, 对用户谎称"内容已被删除"——站点本来就支持西瓜, 直说就行。
-        if location.contains("ixigua.com") {
-            return Err(Error::unsupported(
-                "这条分享链接跳转到了西瓜视频，直接粘贴西瓜视频的链接就能解析",
-            ));
-        }
-        location
+        // 抖音的分享链接有时会跳到西瓜视频。西瓜已并入抖音，作品 ID 就是 aweme_id，
+        // 跳过去的地址照样能取出 ID、走同一个接口，不用让用户改贴西瓜链接
+        location?
     } else {
         url.to_owned()
     };
 
-    let video_id = video_id_from_url(&target)
-        .ok_or_else(|| Error::deleted("链接里没有作品 ID（可能跳到了个人主页或活动页）"))?;
+    let video_id = video_id_from_url(&target).ok_or_else(|| {
+        if host == "v.douyin.com" {
+            // 短链跳到了主页 / 活动页：多半是链接失效了
+            Error::deleted("短链跳转后没有作品 ID（可能跳到了个人主页或活动页）")
+        } else {
+            // 用户贴的是电脑版的主页、搜索页这类本来就不是作品的地址
+            Error::unsupported("这个抖音链接里没有作品 ID，请复制具体作品的分享链接")
+        }
+    })?;
 
     parse_with_hint(http, &video_id, looks_like_note(&target)).await
 }
@@ -467,6 +467,35 @@ mod tests {
             None
         );
         assert_eq!(video_id_from_url("https://www.douyin.com/"), None);
+    }
+
+    #[test]
+    fn xigua_landing_urls_yield_the_aweme_id() {
+        // 抖音短链跳到西瓜作品页：西瓜已并入抖音，ID 就是 aweme_id，照样走 slidesinfo
+        for url in [
+            "https://www.ixigua.com/7234567890123456789",
+            "https://m.ixigua.com/video/7234567890123456789/?a=1",
+            "https://www.iesdouyin.com/xg/video/7234567890123456789/",
+        ] {
+            assert_eq!(
+                video_id_from_url(url).as_deref(),
+                Some("7234567890123456789"),
+                "{url}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_link_without_id_is_unsupported_not_deleted() {
+        let http = Http::new(
+            std::sync::Arc::new(crate::Config::default()),
+            Some(crate::Source::DouYin),
+        )
+        .unwrap();
+        let err = parse(&http, "https://www.douyin.com/search/猫")
+            .await
+            .unwrap_err();
+        assert_eq!(err.reason, crate::Reason::Unsupported);
     }
 
     #[test]

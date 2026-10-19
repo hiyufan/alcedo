@@ -588,6 +588,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn copyrighted_pgc_and_course_links_are_unsupported() {
+        let http = Http::new(
+            std::sync::Arc::new(crate::Config::default()),
+            Some(crate::Source::BiliBili),
+        )
+        .unwrap();
+        for u in [
+            "https://www.bilibili.com/bangumi/play/ep123456",
+            "https://m.bilibili.com/bangumi/play/ss4321",
+            "https://www.bilibili.com/cheese/play/ep99",
+        ] {
+            let err = bvid_from_url(&http, u).await.unwrap_err();
+            assert_eq!(err.reason, Reason::Unsupported, "{u}");
+        }
+    }
+
+    #[tokio::test]
     async fn bvid_extracted_from_page_urls() {
         let http = Http::new(
             std::sync::Arc::new(crate::Config::default()),

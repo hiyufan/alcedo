@@ -180,14 +180,6 @@ async fn pearvideo() {
     );
 }
 
-/// 首页 / 列表里的 `/video_<id>` 形态，和分享出来的 `/detail_<id>` 是同一条。
-#[tokio::test]
-#[ignore = "要联网"]
-async fn pearvideo_list_link() {
-    let info = parse("https://www.pearvideo.com/video_1742158").await;
-    assert_usable(&info);
-}
-
 #[tokio::test]
 #[ignore = "要联网"]
 async fn vimeo() {

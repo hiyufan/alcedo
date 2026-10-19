@@ -36,6 +36,54 @@ async fn parse(url: &str) -> VideoInfo {
     }
 }
 
+/// 直链真的打得开：带上解析给的请求头拉前 1KB，必须 2xx。
+///
+/// 只验证"解析出了地址"不够——地址缺了 Referer / cookie 照样 403，用户点下载才发现。
+/// 顺带按 `serve /media` 代理的做法（只按 CDN 域名补 Referer + 固定 UA）再拉一次，
+/// 结果打出来，代理那条路坏了也能看见。
+async fn assert_playable(info: &VideoInfo) {
+    let url = if info.video_url.is_empty() {
+        match info.images.first() {
+            Some(img) => img.url.clone(),
+            None => return,
+        }
+    } else {
+        info.video_url.clone()
+    };
+    let cfg = std::sync::Arc::new(alcedo::Config::from_env());
+    // 不指定平台：和下载 / 代理一样从本机直连 CDN，不走国内中继
+    let http = alcedo::http::Http::new(cfg, None).expect("初始化失败");
+
+    let mut req = alcedo::http::Req::get(&url).head_bytes(1024);
+    for (k, v) in &info.video_headers {
+        req = req.header(k, v);
+    }
+    let with_headers = http.send(req).await.map(|r| r.status.as_u16());
+
+    let mut proxy_like = alcedo::http::Req::get(&url)
+        .head_bytes(1024)
+        .header("User-Agent", alcedo::http::ua::DESKTOP_FIXED);
+    if let Some(r) = alcedo::parsers::referer_for(&url) {
+        proxy_like = proxy_like.header("Referer", r);
+    }
+    let via_proxy = http.send(proxy_like).await.map(|r| r.status.as_u16());
+    println!(
+        "  可播放 : 带解析请求头 {:?} / 按代理补头 {:?}  ({})",
+        with_headers,
+        via_proxy,
+        truncate(&url)
+    );
+
+    match with_headers {
+        Ok(code) => assert!(
+            (200..300).contains(&code),
+            "直链带着解析给的请求头也打不开: HTTP {code} {}",
+            truncate(&url)
+        ),
+        Err(e) => panic!("直链拉不下来 [{}] {e}: {}", e.reason, truncate(&url)),
+    }
+}
+
 fn truncate(s: &str) -> String {
     if s.chars().count() <= 100 {
         s.to_owned()
@@ -71,6 +119,7 @@ fn assert_usable(info: &VideoInfo) {
 async fn bilibili() {
     let info = parse("https://www.bilibili.com/video/BV1GJ411x7h7").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.title.is_empty());
     assert!(!info.author.name.is_empty());
     // 直链不带 Referer 会被 CDN 403
@@ -122,6 +171,7 @@ async fn youtube() {
 async fn douyin() {
     let info = parse("https://www.douyin.com/video/7688656311999812837").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.title.is_empty(), "标题为空");
     assert!(!info.author.name.is_empty(), "作者为空");
     assert!(info.duration > 0.0, "时长没取到");
@@ -174,6 +224,7 @@ async fn douyin_short_link() {
 async fn acfun() {
     let info = parse("https://www.acfun.cn/v/ac36935385").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(info.video_url.contains(".m3u8"), "AcFun 给的应该是 HLS");
     assert!(!info.author.name.is_empty());
 }
@@ -183,6 +234,7 @@ async fn acfun() {
 async fn pearvideo() {
     let info = parse("https://www.pearvideo.com/detail_1742158").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.title.is_empty(), "标题是并发从详情页取的，不该为空");
     assert!(
         info.video_url.contains("cont-"),
@@ -195,6 +247,7 @@ async fn pearvideo() {
 async fn vimeo() {
     let info = parse("https://vimeo.com/76979871").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.title.is_empty());
 }
 
@@ -215,6 +268,7 @@ async fn dailymotion() {
 async fn tiktok() {
     let info = parse("https://www.tiktok.com/@scout2015/video/6718335390845095173").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.author.name.is_empty(), "作者为空");
     // 直链带签名且校验 Referer，缺了 CDN 一律 403
     assert_eq!(
@@ -231,6 +285,7 @@ async fn tiktok() {
 async fn instagram() {
     let info = parse("https://www.instagram.com/p/BsOGulcndj-/").await;
     assert_usable(&info);
+    assert_playable(&info).await;
 }
 
 /// 2014 年奥斯卡那张自拍，转发量常年排前几，不会被删。是图片推文。
@@ -239,6 +294,7 @@ async fn instagram() {
 async fn twitter() {
     let info = parse("https://x.com/TheEllenShow/status/440322224407314432").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.images.is_empty(), "这条推文带图，图集不该为空");
     assert!(!info.author.name.is_empty(), "作者为空");
 }
@@ -249,6 +305,7 @@ async fn twitter() {
 async fn weibo_video() {
     let info = parse("https://weibo.com/tv/show/1034:4797699866951785").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.title.is_empty(), "标题为空");
 }
 
@@ -267,6 +324,7 @@ async fn weibo_mobile() {
 async fn weibo_post() {
     let info = parse("https://weibo.com/7827771738/N4xlMvjhI").await;
     assert_usable(&info);
+    assert_playable(&info).await;
     assert!(!info.author.name.is_empty(), "作者为空");
 }
 

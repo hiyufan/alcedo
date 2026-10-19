@@ -161,6 +161,28 @@ async fn youtube() {
     );
 }
 
+/// 多 P 视频按 `?p=` 取那一 P（issue #30）。fixture 是 issue 里给的验证用例。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn bilibili_multi_part() {
+    let p1 = parse("https://www.bilibili.com/video/BV1GY4y1V7P8/?p=1").await;
+    let p13 = parse("https://www.bilibili.com/video/BV1GY4y1V7P8/?p=13").await;
+    assert_usable(&p13);
+    assert!(p13.title.contains("P13"), "标题没带上分 P: {}", p13.title);
+    assert!(
+        p13.page_url.contains("p=13"),
+        "page_url 丢了分 P: {}",
+        p13.page_url
+    );
+    // 签名直链每次都变，比字符串说明不了什么；比分 P 标题和时长
+    assert_ne!(p1.title, p13.title, "第 13 P 拿到的还是第一 P");
+    println!(
+        "  P1 时长 {:.1}s / P13 时长 {:.1}s",
+        p1.duration, p13.duration
+    );
+    assert_playable(&p13).await;
+}
+
 /// 抖音是本项目最核心也最容易被打穿的平台，必须有实网覆盖。
 ///
 /// 用的是 `www.douyin.com/video/<aweme_id>` 这种干净形式，不是 App 里复制出来的

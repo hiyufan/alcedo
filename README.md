@@ -266,6 +266,13 @@ let client = Client::with_config(Config {
 抖音可接入外部签名器，配置和 JSON 协议见[签名器文档](docs/signers.md)。未配置或调用
 失败时会继续尝试不带签名的请求，最终是否成功仍取决于平台响应。
 
+默认在 DNS 层拦截解析到内网的地址（防 SSRF）。解析结果里的内网记录会被丢掉，只连剩下的
+公网地址，全是内网才拒绝。Clash / Surge / sing-box / mihomo 一类代理的 fake-ip 模式
+（`198.18.0.0/15`，以及开了 IPv6 时同时给的 ULA 段 AAAA，如 sing-box 默认的 `fc00::/18`、
+mihomo 默认的 `fdfe:dcba:9876::/64`）**不需要**关掉这个检查。`ALCEDO_SSRF_DNS=0` 只在
+平台域名确实解析到内网（内网自建镜像、分区 DNS）时才需要。被拦下时报错里会写明
+"解析到内网地址 …，已拒绝"。
+
 连接复用、平台分发和地址检查的实现见[设计说明](docs/design.md)。
 
 ## 结果缓存

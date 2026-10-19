@@ -475,6 +475,10 @@ pub struct VideoInfo {
     /// 上层可以在播放前比对这个值，快到期就先重新解析再播。
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub expires_at: u64,
+    /// 给用户看的一句说明：平台没给的部分是什么、该怎么办。
+    /// 比如快手实况只对外提供照片和配乐，会动的部分拿不到。空 = 没什么要说明的。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notice: String,
 }
 
 impl VideoInfo {

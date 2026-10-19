@@ -142,6 +142,9 @@ fn print_human(info: &VideoInfo) {
     if info.width > 0 && info.height > 0 {
         println!("尺寸  : {}x{}", info.width, info.height);
     }
+    if !info.notice.is_empty() {
+        println!("提示  : {}", info.notice);
+    }
     if !info.video_url.is_empty() {
         println!("视频  : {}", info.video_url);
     }

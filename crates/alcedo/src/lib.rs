@@ -172,12 +172,17 @@ impl Client {
             })
             .ok_or_else(|| Error::unsupported("没有在输入里找到链接"))?;
 
-        let source = registry::detect(&url).ok_or_else(|| {
-            Error::unsupported(format!(
+        let Some(source) = registry::detect(&url) else {
+            // 平台 CDN 上的图片 / 视频文件地址：不用解析，原样给出去
+            if let Some((source, mut info)) = parsers::direct::media(&url) {
+                self.finish(&mut info, source, &url)?;
+                return Ok(info);
+            }
+            return Err(Error::unsupported(format!(
                 "还不支持 {} 这个站点",
                 util::host_of(&url).unwrap_or_else(|| "该".into())
-            ))
-        })?;
+            )));
+        };
 
         // 缓存键用规范化后的地址：同一条内容的不同写法应当命中同一条
         let key = cache_key(source, &url);
@@ -292,8 +297,15 @@ impl Client {
         info.normalize_formats();
         // 直链常常要带 Referer 才不 403，解析器没填的话按 CDN 域名补一个
         if !info.video_url.is_empty() && !info.video_headers.contains_key("Referer") {
-            if let Some(r) = parsers::referer_for(&info.video_url) {
-                info.set_header("Referer", r);
+            match parsers::referer_for(&info.video_url) {
+                Some(r) => info.set_header("Referer", r),
+                // 名单外的 CDN（平台换了新 CDN、海外镜像）：补作品页所在站点的 Referer，
+                // 平台换 CDN 不会因此 403
+                None => {
+                    if let Some(origin) = page_origin(&info.page_url) {
+                        info.set_header("Referer", origin);
+                    }
+                }
             }
         }
         // 直链的过期时刻一并交给上层：播前可以自查，快到期就重新解析
@@ -348,6 +360,15 @@ fn is_id_param(source: Source, key: &str) -> bool {
         .any(|(s, k)| *s == source && *k == key)
 }
 
+/// `https://www.bilibili.com/video/x` → `https://www.bilibili.com/`。
+fn page_origin(page_url: &str) -> Option<String> {
+    let u = url::Url::parse(page_url).ok()?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return None;
+    }
+    Some(format!("{}://{}/", u.scheme(), u.host_str()?))
+}
+
 /// 缓存键。带上平台是因为不同平台的 ID 命名空间是独立的。
 fn cache_key(source: Source, target: &str) -> String {
     // 去掉 query 里的跟踪参数，让同一条内容的不同分享写法命中同一条缓存；
@@ -376,6 +397,28 @@ fn cache_key(source: Source, target: &str) -> String {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cdn_file_links_come_back_without_network() {
+        let c = Client::new().unwrap();
+        let info = c
+            .parse("https://wx1.sinaimg.cn/large/abc.jpg")
+            .await
+            .unwrap();
+        assert_eq!(info.source, Some(Source::WeiBo));
+        assert_eq!(info.images.len(), 1);
+        assert!(!info.notice.is_empty());
+    }
+
+    #[test]
+    fn page_origin_for_referer_fallback() {
+        assert_eq!(
+            page_origin("https://www.bilibili.com/video/BV1x?p=2").as_deref(),
+            Some("https://www.bilibili.com/")
+        );
+        assert_eq!(page_origin("not a url"), None);
+        assert_eq!(page_origin("data:text/plain,hi"), None);
+    }
 
     #[test]
     fn cache_key_keeps_id_params_and_strips_tracking() {

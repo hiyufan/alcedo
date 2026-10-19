@@ -3,9 +3,12 @@
 //! 主路径：把分享链接里的 shortcode 还原成 media_id，调 `api/v1/media/{id}/info/`。
 //! 这个接口对公开内容不要求登录，但认 `X-IG-App-ID`（网页版自己带的那个）。
 //!
-//! 机房 IP 常被这个接口挡，所以还有一条 OG 标签的兜底路：分享卡片的元数据是
-//! 给爬虫看的，一直公开。兜底拿到的只有一条视频 / 一张图，没有多图和档位，
-//! 但总比报"解析失败"强。
+//! 这个接口现在对未登录请求经常连存在的帖子也报 404，所以接着读帖子页：未登录打开
+//! `/p/{code}` 时页面内嵌的 JSON（`xig_polaris_media.if_not_gated_logged_out`）里就有
+//! 整条帖子，结构和接口的 `items[0]` 一样，多图帖每张都是原图（求原图实测 3072x4096）。
+//!
+//! 两条都不行时还有 OG 标签兜底：分享卡片的元数据是给爬虫看的，一直公开，但只有
+//! 一张图 / 一条视频。
 
 use serde_json::Value;
 
@@ -31,10 +34,16 @@ pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
             // 401/403 则是出口被挡。两种情况 OG 兜底都可能拿得到，
             // 只有落地页也说没了，才是真没了。
             Err(e) => {
-                tracing::debug!(error = %e, "IG 接口不可用，退到 OG 标签");
+                tracing::debug!(error = %e, "IG 接口不可用，读帖子页");
                 api_err = Some(e);
             }
         }
+    }
+
+    match page_post(http, &code).await {
+        Ok(Some(info)) => return Ok(info),
+        Ok(None) => tracing::debug!("帖子页里没有内嵌数据，退到 OG 标签"),
+        Err(e) => tracing::debug!(error = %e, "帖子页打不开，退到 OG 标签"),
     }
 
     og_fallback(http, url, "Instagram")
@@ -66,6 +75,77 @@ pub async fn parse_threads(http: &Http, url: &str) -> Result<VideoInfo> {
         }
     }
     og_fallback(http, url, "Threads").await
+}
+
+/// 未登录访问帖子页时用的头。照浏览器发，缺了 Sec-Fetch-Mode 拿到的是精简页。
+fn page_request(url: &str) -> Req {
+    Req::get(url)
+        .header("User-Agent", ua::DESKTOP_FIXED)
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("Accept-Language", "en-us,en;q=0.5")
+        .header("Sec-Fetch-Mode", "navigate")
+}
+
+/// 帖子页内嵌的整条帖子。页面里没有（要登录、改版）返回 `Ok(None)`。
+///
+/// 和 yt-dlp 一样先开一次首页拿 csrftoken / mid 这些 cookie，再开帖子页。
+async fn page_post(http: &Http, code: &str) -> Result<Option<VideoInfo>> {
+    let home = http
+        .send(page_request("https://www.instagram.com/"))
+        .await?;
+    let mut req = page_request(&format!("https://www.instagram.com/p/{code}/"));
+    for (k, v) in home.set_cookies() {
+        req = req.cookie(k, v);
+    }
+    let resp = http.send(req).await?;
+    if !resp.status.is_success() {
+        return Ok(None);
+    }
+    Ok(find_post(&resp.text(), code)
+        .map(|post| build(&post))
+        .filter(|info| !info.is_empty()))
+}
+
+/// 在页面的 `<script type="application/json">` 里找这条帖子。
+///
+/// 页面里还嵌着作者的其它帖子（推荐区），按 code 认出这一条。
+fn find_post(html: &str, code: &str) -> Option<Value> {
+    json_scripts(html)
+        .filter(|blob| blob.contains("xig_polaris_media"))
+        .filter_map(|blob| serde_json::from_str::<Value>(blob).ok())
+        .find_map(|json| {
+            let post = find_key(&json, "xig_polaris_media")?.get("if_not_gated_logged_out")?;
+            (util::str_at(post, &["code"]) == code).then(|| post.clone())
+        })
+}
+
+/// 页面里所有 `<script type="application/json" ...>` 的内容。
+fn json_scripts(html: &str) -> impl Iterator<Item = &str> {
+    const OPEN: &str = "<script type=\"application/json\"";
+    let mut rest = html;
+    std::iter::from_fn(move || {
+        let at = rest.find(OPEN)?;
+        let after = &rest[at..];
+        let body_start = after.find('>')? + 1;
+        let body_len = after[body_start..].find("</script>")?;
+        let body = &after[body_start..body_start + body_len];
+        rest = &after[body_start + body_len..];
+        Some(body)
+    })
+}
+
+/// 深度优先找第一个叫 `key` 的字段。
+fn find_key<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(map) => map
+            .get(key)
+            .or_else(|| map.values().find_map(|v| find_key(v, key))),
+        Value::Array(items) => items.iter().find_map(|v| find_key(v, key)),
+        _ => None,
+    }
 }
 
 async fn api_info(http: &Http, media_id: &str) -> Result<VideoInfo> {
@@ -190,7 +270,12 @@ async fn og_fallback(http: &Http, url: &str, platform: &str) -> Result<VideoInfo
 
     meta::from_og(&html).ok_or_else(|| {
         let title = util::html_title(&html);
-        if html.contains("/accounts/login") || title.contains("Login") {
+        // 「This post isn't available to everyone / to certain audiences」是只对部分
+        // 用户可见的内容（年龄、地区、作者设置）。页面上也带登录链接，所以要先认它，
+        // 别归成"要求登录"——登录了未必看得到
+        if html.contains("available to everyone") || html.contains("certain audiences") {
+            Error::restricted(format!("{platform} 只对部分用户展示这条内容"))
+        } else if html.contains("/accounts/login") || title.contains("Login") {
             Error::login(format!("{platform} 要求这个出口登录"))
         } else {
             Error::restricted(format!(
@@ -253,6 +338,37 @@ mod tests {
         // 没走接口（shortcode 解不出 id）就只有落地页的结论
         let got = more_useful(None, Error::restricted("og"));
         assert_eq!(got.reason, Reason::Restricted);
+    }
+
+    #[test]
+    fn finds_this_post_among_embedded_ones() {
+        let other = json!({"xig_polaris_media": {"if_not_gated_logged_out": {"code": "OTHER"}}});
+        let this = json!({"require": [[{"__bbox": {"result": {"data": {"xig_polaris_media": {
+        "if_not_gated_logged_out": {
+            "code": "BsOGulcndj-",
+            "caption": {"text": "egg"},
+            "user": {"pk": 1, "username": "world_record_egg"},
+            "carousel_media": [
+                {"image_versions2": {"candidates": [
+                    {"url": "https://x.cdninstagram.com/orig.jpg", "width": 3072, "height": 4096},
+                    {"url": "https://x.cdninstagram.com/small.jpg", "width": 320, "height": 427}
+                ]}},
+                {"image_versions2": {"candidates": [
+                    {"url": "https://x.cdninstagram.com/2.jpg", "width": 1080, "height": 1080}
+                ]}}
+            ]
+        }}}}}}]]});
+        let html = format!(
+            r#"<html><script type="application/json" data-sjs>{other}</script>
+            <script type="application/json" data-content-len="9">{this}</script>
+            <script>var x = 1;</script></html>"#
+        );
+        let post = find_post(&html, "BsOGulcndj-").expect("该认出这一条");
+        let info = build(&post);
+        assert_eq!(info.images.len(), 2, "多图帖要整条拿到");
+        assert_eq!(info.images[0].url, "https://x.cdninstagram.com/orig.jpg");
+        assert_eq!(info.author.name, "world_record_egg");
+        assert!(find_post(&html, "NOPE").is_none());
     }
 
     #[test]

@@ -139,6 +139,16 @@ async fn douyin() {
     );
 }
 
+/// 西瓜已并入抖音，作品 ID 就是 aweme_id：西瓜链接解析走抖音的 slidesinfo 接口。
+/// 拿上面那条抖音作品的 ID 拼成西瓜链接，验证整条路通。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn xigua_routes_through_douyin() {
+    let info = parse("https://www.ixigua.com/7688656311999812837").await;
+    assert_usable(&info);
+    assert!(!info.title.is_empty(), "标题为空");
+}
+
 /// 短链要能跟到作品 ID。这条和上面那条走的是不同的分支。
 ///
 /// 注意这里只验证"跟得到、解析得出"，不断言具体内容——短链本身可能过期。

@@ -15,6 +15,8 @@ static DOMAINS: &[(&str, Source)] = &[
     ("iesdouyin.com", Source::DouYin),
     ("kuaishou.com", Source::KuaiShou),
     ("chenzhongtech.com", Source::KuaiShou),
+    // 网页版 /f/ 短链的跳转链上会经过 m.gifshow.com 的作品页
+    ("gifshow.com", Source::KuaiShou),
     ("pipix.com", Source::PiPiXia),
     ("weibo.com", Source::WeiBo),
     // m.weibo.cn 是微博手机站。绿洲（已停运）只占 oasis.weibo.cn，以前登记成整个
@@ -115,7 +117,8 @@ pub fn supported() -> Vec<Source> {
 pub const fn warmup_host(source: Source) -> Option<&'static str> {
     Some(match source {
         Source::DouYin => "www.douyin.com",
-        Source::XiGua => "m.ixigua.com",
+        // 西瓜作品走抖音的 slidesinfo 接口
+        Source::XiGua => "www.douyin.com",
         Source::BiliBili => "api.bilibili.com",
         Source::YouTube => "www.youtube.com",
         Source::TikTok => "www.tiktok.com",

@@ -23,12 +23,19 @@ static BUVID: IdentitySlot = IdentitySlot::new(Duration::from_secs(3600));
 
 /// 解析一条哔哩哔哩分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
-    let bvid = bvid_from_url(http, url).await?;
-    parse_id(http, &bvid).await
+    let (bvid, page) = bvid_from_url(http, url).await?;
+    parse_part(http, &bvid, page).await
 }
 
-/// 已知哔哩哔哩作品 ID 时直接解析。
+/// 已知哔哩哔哩作品 ID 时直接解析（第一 P）。
 pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
+    parse_part(http, bvid, 1).await
+}
+
+/// 解析多 P 视频的第 `page` P（从 1 数，链接里的 `?p=`）。
+///
+/// 解析、清晰度、时长都按这一 P 来：以前一律给第一 P，时长还是所有分 P 加起来的。
+async fn parse_part(http: &Http, bvid: &str, page: u32) -> Result<VideoInfo> {
     let http = http.clone().with_fixed_ua(ua::DESKTOP_FIXED);
     let cookie = ensure_buvid(&http).await;
     let cookie = cookie.as_deref();
@@ -41,7 +48,7 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
         id_param(bvid, "aid")
     );
     let (view, early) = tokio::join!(api_get(&http, &view_url, cookie), async {
-        let cid = page_cid(&http, bvid, cookie).await?;
+        let cid = page_cid(&http, bvid, page, cookie).await?;
         Some(play_urls(&http, bvid, cid, cookie).await)
     });
     let view = view?;
@@ -57,11 +64,13 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     }
 
     let data = util::get(&view, &["data"]).ok_or_else(|| Error::parse("view 接口没有 data"))?;
+    let pages = util::arr_at(data, &["pages"]);
+    let part = pick_part(pages, page)?;
     let (play, legacy) = match early {
         Some(urls) => urls,
         // pagelist 没拿到（老 av 号之类），退回用 view 里的 cid 再要一次
         None => {
-            let cid = util::u64_at(data, &["pages", "0", "cid"]);
+            let cid = util::u64_at(part, &["cid"]);
             if cid == 0 {
                 return Err(Error::parse("view 接口没有返回 cid"));
             }
@@ -80,9 +89,12 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
     let play_data = util::get(&play, &["data"]).ok_or_else(|| Error::parse("playurl 没有 data"))?;
 
     let mut info = VideoInfo {
-        title: util::str_at(data, &["title"]),
+        title: part_title(&util::str_at(data, &["title"]), pages.len(), page, part),
         cover_url: util::str_at(data, &["pic"]),
-        duration: util::num_at(data, &["duration"]),
+        // 多 P 视频 view 里的 duration 是所有分 P 加起来的，按它估体积能差几十倍
+        duration: Some(util::num_at(part, &["duration"]))
+            .filter(|&d| d > 0.0)
+            .unwrap_or_else(|| util::num_at(data, &["duration"])),
         author: Author::new(
             util::id_at(data, &["owner", "mid"]),
             util::str_at(data, &["owner", "name"]),
@@ -116,14 +128,53 @@ pub async fn parse_id(http: &Http, bvid: &str) -> Result<VideoInfo> {
         return Err(Error::bare(Reason::Empty));
     }
 
+    if page > 1 {
+        // 上层要回源时得知道是哪一 P
+        let id = Some(util::str_at(data, &["bvid"]))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| bvid.to_owned());
+        info.page_url = format!("https://www.bilibili.com/video/{id}?p={page}");
+    }
+
     // 直链必须带 Referer，否则 CDN 一律 403
     info.set_header("Referer", REFERER);
     info.set_header("User-Agent", ua::DESKTOP_FIXED);
     Ok(info)
 }
 
-/// 从各种 B 站地址里拿到 BV 号。
-async fn bvid_from_url(http: &Http, url: &str) -> Result<String> {
+/// 选中的那一 P。`pages` 为空（老接口没给分 P 列表）时只认第一 P。
+///
+/// 不悄悄换成第一 P：用户要的是第几 P 就给第几 P，没有就说清楚。
+fn pick_part(pages: &[Value], page: u32) -> Result<&Value> {
+    if pages.is_empty() && page == 1 {
+        return Ok(&util::NULL);
+    }
+    pages
+        .get((page as usize).wrapping_sub(1))
+        .ok_or_else(|| Error::deleted(format!("这个视频只有 {} P，没有第 {page} P", pages.len())))
+}
+
+/// 多 P 视频的标题带上分 P 名，不然十几个分 P 下载下来全叫一个名字。
+fn part_title(title: &str, total: usize, page: u32, part: &Value) -> String {
+    let name = util::str_at(part, &["part"]);
+    if total > 1 && !name.is_empty() {
+        format!("{title} P{page} {name}")
+    } else {
+        title.to_owned()
+    }
+}
+
+/// 链接里的分 P 序号（`?p=13`），没有或不合法按第一 P。
+fn page_number(url: &url::Url) -> u32 {
+    url.query_pairs()
+        .find(|(k, _)| k == "p")
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+        .filter(|&p| p >= 1)
+        .unwrap_or(1)
+}
+
+/// 从各种 B 站地址里拿到 BV 号和分 P 序号。
+async fn bvid_from_url(http: &Http, url: &str) -> Result<(String, u32)> {
     let host = util::host_of(url).unwrap_or_default();
 
     // 短链：b23.tv / bili2233.cn
@@ -145,14 +196,14 @@ async fn bvid_from_url(http: &Http, url: &str) -> Result<String> {
         .path_segments()
         .and_then(|mut s| s.find(|p| p.starts_with("BV") || p.starts_with("bv")))
     {
-        return Ok(seg.to_owned());
+        return Ok((seg.to_owned(), page_number(&parsed)));
     }
     // /video/av170001 这种老地址
     if let Some(av) = parsed.path_segments().and_then(|mut s| {
         // len > 2：裸 "av" 段（p[2..] 为空、all() 对空迭代器返回 true）不该被当成 ID
         s.find(|p| p.len() > 2 && p.starts_with("av") && p[2..].bytes().all(|b| b.is_ascii_digit()))
     }) {
-        return Ok(av.to_owned());
+        return Ok((av.to_owned(), page_number(&parsed)));
     }
     Err(Error::unsupported("不是有效的 B 站视频链接（没有 BV 号）"))
 }
@@ -227,14 +278,15 @@ fn id_param(id: &str, aid_key: &str) -> String {
     }
 }
 
-/// 第一 P 的 cid。拿不到返回 `None`，由调用方退回 view 里的那份。
-async fn page_cid(http: &Http, bvid: &str, cookie: Option<&str>) -> Option<u64> {
+/// 第 `page` P 的 cid。拿不到（含超出范围）返回 `None`，由调用方按 view 里的分 P 列表处理。
+async fn page_cid(http: &Http, bvid: &str, page: u32, cookie: Option<&str>) -> Option<u64> {
     let url = format!(
         "https://api.bilibili.com/x/player/pagelist?{}",
         id_param(bvid, "aid")
     );
     let json = api_get(http, &url, cookie).await.ok()?;
-    Some(util::u64_at(&json, &["data", "0", "cid"])).filter(|&c| c != 0)
+    let idx = page.checked_sub(1)?.to_string();
+    Some(util::u64_at(&json, &["data", idx.as_str(), "cid"])).filter(|&c| c != 0)
 }
 
 /// 两份播放地址：DASH 分轨（fnval=4048 要 DASH，fourk=1 放开 4K）和合一流。
@@ -501,6 +553,23 @@ mod tests {
         assert!(dash_formats(&data).is_empty());
     }
 
+    #[test]
+    fn selected_part_and_its_title() {
+        let pages = vec![
+            json!({"cid": 11, "part": "开场", "duration": 60}),
+            json!({"cid": 22, "part": "正片", "duration": 600}),
+        ];
+        assert_eq!(util::u64_at(pick_part(&pages, 2).unwrap(), &["cid"]), 22);
+        // 没有这一 P 要说清楚，不能悄悄换成第一 P
+        assert_eq!(pick_part(&pages, 3).unwrap_err().reason, Reason::Deleted);
+        assert_eq!(pick_part(&pages, 0).unwrap_err().reason, Reason::Deleted);
+        // 老接口没给分 P 列表时第一 P 照常
+        assert!(pick_part(&[], 1).is_ok());
+
+        assert_eq!(part_title("合集", 2, 2, &pages[1]), "合集 P2 正片");
+        assert_eq!(part_title("单 P", 1, 1, &pages[0]), "单 P");
+    }
+
     #[tokio::test]
     async fn copyrighted_pgc_and_course_links_are_unsupported() {
         let http = Http::new(
@@ -529,13 +598,30 @@ mod tests {
             bvid_from_url(&http, "https://www.bilibili.com/video/BV1xx411c7mD/?spm=1")
                 .await
                 .unwrap(),
-            "BV1xx411c7mD"
+            ("BV1xx411c7mD".to_owned(), 1)
         );
         assert_eq!(
             bvid_from_url(&http, "https://m.bilibili.com/video/av170001")
                 .await
                 .unwrap(),
-            "av170001"
+            ("av170001".to_owned(), 1)
+        );
+        // 多 P：链接里的 ?p= 要带下去，不合法的按第一 P
+        assert_eq!(
+            bvid_from_url(
+                &http,
+                "https://www.bilibili.com/video/BV1xx411c7mD?p=13&spm=1"
+            )
+            .await
+            .unwrap(),
+            ("BV1xx411c7mD".to_owned(), 13)
+        );
+        assert_eq!(
+            bvid_from_url(&http, "https://www.bilibili.com/video/BV1xx411c7mD?p=0")
+                .await
+                .unwrap()
+                .1,
+            1
         );
         assert!(bvid_from_url(&http, "https://www.bilibili.com/read/cv123")
             .await

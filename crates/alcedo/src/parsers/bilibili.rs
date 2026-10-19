@@ -133,6 +133,14 @@ async fn bvid_from_url(http: &Http, url: &str) -> Result<String> {
     }
 
     let parsed = url::Url::parse(url)?;
+    // 番剧 / 电影 / 纪录片（bangumi/play/ep… ss…）和付费课程（cheese/play/…）是版权内容：
+    // 只限中国大陆、不登录最多 480p、会员集只有试看。不支持，直说，别去请求接口再报
+    // 一个"页面结构变了"
+    if parsed.path().contains("/bangumi/play/") || parsed.path().contains("/cheese/play/") {
+        return Err(Error::unsupported(
+            "B 站番剧、电影、纪录片和课程是版权内容，不支持解析",
+        ));
+    }
     if let Some(seg) = parsed
         .path_segments()
         .and_then(|mut s| s.find(|p| p.starts_with("BV") || p.starts_with("bv")))
@@ -491,6 +499,23 @@ mod tests {
     fn dash_skips_entries_without_url() {
         let data = json!({"dash": {"audio": [], "video": [{"id": 80, "height": 1080}]}});
         assert!(dash_formats(&data).is_empty());
+    }
+
+    #[tokio::test]
+    async fn copyrighted_pgc_and_course_links_are_unsupported() {
+        let http = Http::new(
+            std::sync::Arc::new(crate::Config::default()),
+            Some(crate::Source::BiliBili),
+        )
+        .unwrap();
+        for u in [
+            "https://www.bilibili.com/bangumi/play/ep123456",
+            "https://m.bilibili.com/bangumi/play/ss4321",
+            "https://www.bilibili.com/cheese/play/ep99",
+        ] {
+            let err = bvid_from_url(&http, u).await.unwrap_err();
+            assert_eq!(err.reason, Reason::Unsupported, "{u}");
+        }
     }
 
     #[tokio::test]

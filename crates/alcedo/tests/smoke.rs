@@ -180,6 +180,14 @@ async fn pearvideo() {
     );
 }
 
+/// 首页 / 列表里的 `/video_<id>` 形态，和分享出来的 `/detail_<id>` 是同一条。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn pearvideo_list_link() {
+    let info = parse("https://www.pearvideo.com/video_1742158").await;
+    assert_usable(&info);
+}
+
 #[tokio::test]
 #[ignore = "要联网"]
 async fn vimeo() {
@@ -240,6 +248,15 @@ async fn weibo_video() {
     let info = parse("https://weibo.com/tv/show/1034:4797699866951785").await;
     assert_usable(&info);
     assert!(!info.title.is_empty(), "标题为空");
+}
+
+/// 微博手机站链接。以前 `weibo.cn` 整个登记给了绿洲（已停运），m.weibo.cn 的链接全被分错。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn weibo_mobile() {
+    let info = parse("https://m.weibo.cn/7827771738/N4xlMvjhI").await;
+    assert_usable(&info);
+    assert!(!info.author.name.is_empty(), "作者为空");
 }
 
 /// 普通博文（`weibo.com/<uid>/<mblogid>`），走 m 站接口。

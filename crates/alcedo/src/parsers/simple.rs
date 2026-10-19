@@ -252,18 +252,60 @@ pub async fn quanminkge_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
     let detail =
         util::get(&json, &["detail"]).ok_or_else(|| Error::deleted("__DATA__ 里没有 detail"))?;
+    build_kge(detail)
+}
 
+fn build_kge(detail: &Value) -> Result<VideoInfo> {
+    // 大多是纯音频的翻唱：没有 playurl_video，只有 playurl（音频）。两个都空的是设了私密 / 下架了
+    let video_url = util::str_at(detail, &["playurl_video"]);
+    let audio_url = util::str_at(detail, &["playurl"]);
+    if video_url.is_empty() && audio_url.is_empty() {
+        return Err(Error::restricted(
+            "全民K歌没给这首作品的播放地址，可能设了私密或者下架了",
+        ));
+    }
+    let song = util::str_at(detail, &["song_name"]);
+    let content = util::str_at(detail, &["content"]);
+    // 纯音频作品的 content 多是「我唱了一首歌，快来听听吧。」，歌名更有用
+    let title = if (video_url.is_empty() && !song.is_empty()) || content.is_empty() {
+        song
+    } else {
+        content
+    };
     Ok(VideoInfo {
-        video_url: util::str_at(detail, &["playurl_video"]),
+        music_url: if video_url.is_empty() {
+            audio_url
+        } else {
+            String::new()
+        },
+        video_url,
         cover_url: util::str_at(detail, &["cover"]),
-        title: util::str_at(detail, &["content"]),
+        title,
         author: Author::new(
             util::id_at(detail, &["uid"]),
-            util::str_at(detail, &["nick"]),
+            strip_em_codes(&util::str_at(detail, &["nick"])),
             util::str_at(detail, &["avatar"]),
         ),
         ..Default::default()
     })
+}
+
+/// 昵称里的表情是 `[em]e400846[/em]` 这种代码，原样显示就是一串乱码。
+fn strip_em_codes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("[em]") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("[/em]") {
+            Some(end) => rest = &rest[start + end + "[/em]".len()..],
+            None => {
+                rest = &rest[start..];
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // ---------------------------------------------------------------- 六间房
@@ -343,6 +385,50 @@ pub async fn haokan_id(http: &Http, id: &str) -> Result<VideoInfo> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn kge_audio_only_cover_gives_music_and_song_title() {
+        let info = build_kge(&json!({
+            "playurl_video": "",
+            "playurl": "https://ws.stream.kg.qq.com/a.m4a",
+            "song_name": "晴天",
+            "content": "我唱了一首歌，快来听听吧。",
+            "nick": "小[em]e400846[/em]明[em]e1[/em]",
+            "uid": "u1",
+        }))
+        .unwrap();
+        assert!(info.video_url.is_empty());
+        assert_eq!(info.music_url, "https://ws.stream.kg.qq.com/a.m4a");
+        assert_eq!(info.title, "晴天");
+        assert_eq!(info.author.name, "小明");
+        assert!(!info.is_empty(), "纯音频也是有内容的");
+    }
+
+    #[test]
+    fn kge_video_keeps_caption_and_no_duplicate_audio() {
+        let info = build_kge(&json!({
+            "playurl_video": "https://ws.stream.kg.qq.com/v.mp4",
+            "playurl": "https://ws.stream.kg.qq.com/a.m4a",
+            "song_name": "晴天",
+            "content": "MV 版",
+        }))
+        .unwrap();
+        assert_eq!(info.video_url, "https://ws.stream.kg.qq.com/v.mp4");
+        assert!(info.music_url.is_empty());
+        assert_eq!(info.title, "MV 版");
+    }
+
+    #[test]
+    fn kge_without_any_url_is_restricted() {
+        let err = build_kge(&json!({"playurl_video": "", "playurl": ""})).unwrap_err();
+        assert_eq!(err.reason, crate::Reason::Restricted);
+    }
+
+    #[test]
+    fn em_codes_unclosed_tail_is_kept() {
+        assert_eq!(strip_em_codes("a[em]x"), "a[em]x");
+        assert_eq!(strip_em_codes("无表情"), "无表情");
+    }
 
     #[test]
     fn business_error_code_becomes_restricted() {

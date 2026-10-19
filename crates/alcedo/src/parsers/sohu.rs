@@ -1,7 +1,8 @@
 //! 搜狐视频。
 //!
-//! 两种地址形态：`tv.sohu.com/v/<base64>.html`（base64 里装着真实路径）和
-//! `my.tv.sohu.com/us/<uid>/<vid>.shtml`。
+//! 地址形态：`tv.sohu.com/v/<base64>.html`（base64 里装着真实路径）、
+//! `my.tv.sohu.com/us/<uid>/<vid>.shtml`，以及搜狐首页上 base64 包着的
+//! `<日期>/n<vid>.shtml`——三种的 vid 查同一个接口。
 
 use base64::Engine;
 
@@ -74,8 +75,11 @@ fn vid_from_url(url: &str) -> Result<String> {
     vid_from_path(url)
 }
 
-/// `us/<uid>/<vid>.shtml` 里的 vid。
+/// `us/<uid>/<vid>.shtml` 或 `<日期>/n<vid>.shtml` 里的 vid。
 fn vid_from_path(path: &str) -> Result<String> {
+    if let Some(vid) = dated_vid(path) {
+        return Ok(vid.to_owned());
+    }
     let at = path
         .find("/us/")
         .map(|i| i + 4)
@@ -90,6 +94,17 @@ fn vid_from_path(path: &str) -> Result<String> {
         .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
         .ok_or_else(|| Error::unsupported(format!("无法从 {path} 里取出视频 ID")))?;
     Ok(vid.to_owned())
+}
+
+/// 搜狐首页上的 `<8 位日期>/n<vid>.shtml`。
+fn dated_vid(path: &str) -> Option<&str> {
+    let path = path.split(['?', '#']).next()?;
+    let segs: Vec<&str> = path.split('/').collect();
+    segs.windows(2).find_map(|w| {
+        let is_date = w[0].len() == 8 && w[0].bytes().all(|b| b.is_ascii_digit());
+        let vid = w[1].strip_prefix('n')?.strip_suffix(".shtml")?;
+        (is_date && !vid.is_empty() && vid.bytes().all(|b| b.is_ascii_digit())).then_some(vid)
+    })
 }
 
 #[cfg(test)]
@@ -112,6 +127,20 @@ mod tests {
         let b64 = base64::engine::general_purpose::STANDARD.encode(inner);
         let url = format!("https://tv.sohu.com/v/{b64}.html");
         assert_eq!(vid_from_url(&url).unwrap(), "4455667");
+    }
+
+    #[test]
+    fn extracts_vid_from_dated_path() {
+        // 搜狐首页上的作品：base64 解出来是 <日期>/n<vid>.shtml，以前认不出 ID
+        let b64 = base64::engine::general_purpose::STANDARD.encode("20240101/n600123456.shtml");
+        let url = format!("https://tv.sohu.com/v/{b64}.html");
+        assert_eq!(vid_from_url(&url).unwrap(), "600123456");
+        assert_eq!(
+            vid_from_url("https://tv.sohu.com/20240101/n600123456.shtml").unwrap(),
+            "600123456"
+        );
+        // 日期段不是 8 位数字就不认
+        assert!(vid_from_url("https://tv.sohu.com/2024/n600123456.shtml").is_err());
     }
 
     #[test]

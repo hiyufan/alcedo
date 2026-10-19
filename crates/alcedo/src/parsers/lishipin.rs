@@ -9,15 +9,21 @@ use crate::util;
 
 /// 解析一条梨视频分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
-    let parsed = url::Url::parse(url)?;
-    let id = parsed
-        .path()
-        .trim_matches('/')
-        .strip_prefix("detail_")
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| Error::unsupported("不是有效的梨视频链接"))?
-        .to_owned();
-    parse_id(http, &id).await
+    let id = cont_id(url).ok_or_else(|| Error::unsupported("链接里没有梨视频的作品 ID"))?;
+    parse_id(http, id).await
+}
+
+/// 作品 ID：分享出来是 `/detail_<id>`，首页和列表里是 `/video_<id>`，接口地址里是 `contId=<id>`。
+fn cont_id(url: &str) -> Option<&str> {
+    ["/detail_", "/video_", "contId="]
+        .iter()
+        .find_map(|marker| {
+            let rest = &url[url.find(marker)? + marker.len()..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            (end > 0).then(|| &rest[..end])
+        })
 }
 
 /// 已知梨视频作品 ID 时直接解析。
@@ -105,6 +111,25 @@ fn title_from_page(html: &str) -> String {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cont_id_from_every_url_shape() {
+        assert_eq!(
+            cont_id("https://www.pearvideo.com/detail_1742158"),
+            Some("1742158")
+        );
+        // 首页 / 列表里的地址，以前把 "video_1807774" 整个当成 ID
+        assert_eq!(
+            cont_id("https://www.pearvideo.com/video_1807774"),
+            Some("1807774")
+        );
+        assert_eq!(
+            cont_id("https://www.pearvideo.com/videoStatus.jsp?contId=1742158&mrd=1"),
+            Some("1742158")
+        );
+        assert_eq!(cont_id("https://www.pearvideo.com/category_1"), None);
+        assert_eq!(cont_id("https://www.pearvideo.com/detail_"), None);
+    }
 
     #[test]
     fn title_comes_from_og_then_h1() {

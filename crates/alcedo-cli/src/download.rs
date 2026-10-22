@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use alcedo::{Format, Source, VideoInfo};
 
-use crate::{media, ranged};
+use crate::{hls, media, ranged};
 
 pub(crate) struct Options {
     input: String,
@@ -91,7 +91,12 @@ pub(crate) async fn run(opts: Options) -> Result<(), String> {
 }
 
 fn print_formats(info: &VideoInfo) {
-    if !info.video_url.is_empty() {
+    if hls::looks_like_hls(&info.video_url) {
+        println!(
+            "默认档: HLS，下载时拼接分片（{}p 以内，不带 --format / --best 时就下它）",
+            hls::DEFAULT_MAX_HEIGHT
+        );
+    } else if !info.video_url.is_empty() {
         println!("默认档: 可直接下载（不带 --format / --best 时就下它）");
     }
     if info.formats.is_empty() {
@@ -126,6 +131,7 @@ enum Pick {
         video: String,
         audio: String,
         label: String,
+        height: u32,
     },
 }
 
@@ -135,6 +141,7 @@ fn to_pick(f: &Format) -> Pick {
             video: f.video_url.clone(),
             audio: f.audio_url.clone(),
             label: f.label.clone(),
+            height: f.height,
         }
     } else {
         Pick::Direct {
@@ -200,6 +207,18 @@ fn stem_of(info: &VideoInfo) -> String {
 
 async fn download_video(info: &VideoInfo, opts: &Options) -> Result<(), String> {
     match pick(info, opts)? {
+        Pick::Direct { url, label } if hls::looks_like_hls(&url) => {
+            println!("下载 {label}（HLS）");
+            hls::download(
+                &url,
+                &headers_for(info, &url),
+                Path::new(&opts.dir),
+                &stem_of(info),
+                hls::DEFAULT_MAX_HEIGHT,
+            )
+            .await
+            .map(|_| ())
+        }
         Pick::Direct { url, label } => {
             println!("下载 {label}");
             fetch_to_file(
@@ -217,7 +236,8 @@ async fn download_video(info: &VideoInfo, opts: &Options) -> Result<(), String> 
             video,
             audio,
             label,
-        } => merge_download(info, &video, &audio, &label, opts).await,
+            height,
+        } => merge_download(info, &video, &audio, &label, height, opts).await,
     }
 }
 
@@ -277,16 +297,12 @@ async fn merge_download(
     video_url: &str,
     audio_url: &str,
     label: &str,
+    height: u32,
     opts: &Options,
 ) -> Result<(), String> {
     let dir = Path::new(&opts.dir);
     // 先确认 ffmpeg 在不在，别两条轨都下完了才发现没法合
-    let has_ffmpeg = tokio::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .await
-        .is_ok_and(|o| o.status.success());
-    if !has_ffmpeg {
+    if !media::has_ffmpeg().await {
         return Err(format!(
             "「{label}」是音视频分离（DASH）档位，合并需要 ffmpeg，但 PATH 里没找到；\
              装好后重试，或用 --format 选一档直链（--list 看档位）"
@@ -294,30 +310,17 @@ async fn merge_download(
     }
 
     println!("下载 {label}（视频轨 + 音频轨，ffmpeg 合并）");
-    let video = fetch_to_file(
-        video_url,
-        headers_for(info, video_url),
-        dir,
-        &format!("{} [视频轨]", stem_of(info)),
-        "mp4",
-        "视频轨",
-    )
-    .await?;
-    let audio = match fetch_to_file(
-        audio_url,
-        headers_for(info, audio_url),
-        dir,
-        &format!("{} [音频轨]", stem_of(info)),
-        "m4a",
-        "音频轨",
-    )
-    .await
-    {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&video).await;
-            return Err(e);
+    let (video, audio) = match fetch_tracks(info, video_url, audio_url, dir).await {
+        Ok(tracks) => tracks,
+        // 分轨被拒时同一出口的 HLS 常常还能下（见 hls 模块说明）：结果里有就退过去
+        Err(e) if hls::looks_like_hls(&info.video_url) => {
+            eprintln!("分轨下载失败（{e}），改用同清晰度的 HLS");
+            let url = &info.video_url;
+            return hls::download(url, &headers_for(info, url), dir, &stem_of(info), height)
+                .await
+                .map(|_| ());
         }
+        Err(e) => return Err(e),
     };
 
     let out = unique_path(dir, &media::safe_filename(&stem_of(info), "media"), "mp4");
@@ -390,6 +393,40 @@ async fn fetch_to_file(
     Ok(path)
 }
 
+/// 分别下视频轨和音频轨。任何一条失败都不留半截文件。
+async fn fetch_tracks(
+    info: &VideoInfo,
+    video_url: &str,
+    audio_url: &str,
+    dir: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let video = fetch_to_file(
+        video_url,
+        headers_for(info, video_url),
+        dir,
+        &format!("{} [视频轨]", stem_of(info)),
+        "mp4",
+        "视频轨",
+    )
+    .await?;
+    match fetch_to_file(
+        audio_url,
+        headers_for(info, audio_url),
+        dir,
+        &format!("{} [音频轨]", stem_of(info)),
+        "m4a",
+        "音频轨",
+    )
+    .await
+    {
+        Ok(audio) => Ok((video, audio)),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&video).await;
+            Err(e)
+        }
+    }
+}
+
 /// 打开直链：(Content-Type, 总大小, 内容流)。googlevideo 按段拉（整段请求会被限速，
 /// 见 [`crate::ranged`]），其余一个请求流式拉完。
 async fn open_media(
@@ -400,10 +437,7 @@ async fn open_media(
 
     let client = media::client_for(url);
     let resp = if media::is_googlevideo(url) {
-        match ranged::open(client, url, headers, 0, None)
-            .await
-            .map_err(|e| e.to_string())?
-        {
+        match ranged::open(client, url, headers, 0, None).await? {
             Ok(r) => {
                 let ct = r.headers.get("content-type").and_then(|v| v.to_str().ok());
                 return Ok((ct.map(str::to_owned), Some(r.total), r.body));
@@ -435,7 +469,7 @@ async fn open_media(
 }
 
 /// 重名避让：`名.ext` 存在就试 `名 (2).ext`、`名 (3).ext`……
-fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+pub(crate) fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let candidate = |n: Option<u32>| match n {
         None => dir.join(format!("{stem}.{ext}")),
         Some(n) => dir.join(format!("{stem} ({n}).{ext}")),

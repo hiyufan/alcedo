@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use alcedo::{Client, Source, VideoInfo};
 
 mod download;
+mod hls;
 mod media;
 mod ranged;
 mod serve;

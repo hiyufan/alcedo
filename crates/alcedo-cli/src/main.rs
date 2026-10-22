@@ -21,6 +21,7 @@ mod ranged;
 mod serve;
 
 fn main() -> ExitCode {
+    quiet_on_closed_pipe();
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -32,6 +33,36 @@ fn main() -> ExitCode {
         }
     };
     rt.block_on(run())
+}
+
+/// `alcedo --list | head`：head 读够了就关掉管道，`println!` 写不进去会 panic，打出一段堆栈。
+///
+/// 别的 Unix 工具这时被 SIGPIPE 安静地结束。Rust 程序默认忽略 SIGPIPE，改回默认处理要写
+/// `unsafe`（工作区禁了），所以在 panic 钩子里认出这一种情况，照 SIGPIPE 的惯例以 141
+/// 退出。其它 panic 照常报。
+fn quiet_on_closed_pipe() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if is_closed_pipe(message) {
+            std::process::exit(141);
+        }
+        default(info);
+    }));
+}
+
+/// `println!` 写 stdout 失败时 panic 的文案里带着底层错误：Unix 上是 EPIPE，
+/// Windows 上是"管道正在被关闭"（232）或"管道已结束"（109）。
+fn is_closed_pipe(message: &str) -> bool {
+    message.starts_with("failed printing to stdout")
+        && (message.to_ascii_lowercase().contains("broken pipe")
+            || message.contains("os error 232")
+            || message.contains("os error 109"))
 }
 
 async fn run() -> ExitCode {
@@ -261,4 +292,22 @@ fn print_download_help() {
   alcedo download <链接> --list                        看有哪些档位",
         ver = env!("CARGO_PKG_VERSION")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_a_closed_stdout_pipe_is_silenced() {
+        assert!(super::is_closed_pipe(
+            "failed printing to stdout: Broken pipe (os error 32)"
+        ));
+        assert!(super::is_closed_pipe(
+            "failed printing to stdout: The pipe is being closed. (os error 232)"
+        ));
+        // 磁盘写满这类错误要照常报出来
+        assert!(!super::is_closed_pipe(
+            "failed printing to stdout: No space left on device (os error 28)"
+        ));
+        assert!(!super::is_closed_pipe("index out of bounds"));
+    }
 }

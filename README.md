@@ -20,8 +20,6 @@
 
 <img src="docs/demo.svg" alt="alcedo 演示：贴抖音分享文案直接下载，再下载 YouTube 1080p 并合并音视频" width="100%">
 
-<sub>真实运行录制（超过 2 秒的网络等待压到 2 秒），用 [`scripts/record-demo.py`](scripts/record-demo.py) 重新录制。</sub>
-
 ```console
 $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 平台  : YouTube

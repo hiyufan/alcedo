@@ -86,6 +86,44 @@ pub(crate) async fn send_following(
     Err(format!("跳转超过 {MAX_HOPS} 次"))
 }
 
+/// 下载进度：按 10% 一档原地刷新一行。
+///
+/// stderr 不是终端（重定向进日志）时什么都不输出，不然日志里全是 `\r`。结束时清掉这一行，
+/// 结果行直接接在原处，不留一行停在 90% 的进度。
+pub(crate) struct Progress {
+    what: String,
+    shown: u64,
+    tty: bool,
+}
+
+impl Progress {
+    pub(crate) fn new(what: &str) -> Self {
+        use std::io::IsTerminal;
+        Self {
+            what: what.to_owned(),
+            shown: 0,
+            tty: std::io::stderr().is_terminal(),
+        }
+    }
+
+    pub(crate) fn update(&mut self, done: u64, total: u64) {
+        if !self.tty || total == 0 {
+            return;
+        }
+        let tenth = (done * 10 / total).min(9);
+        if tenth > self.shown {
+            self.shown = tenth;
+            eprint!("\r{} {:>3}%", self.what, tenth * 10);
+        }
+    }
+
+    pub(crate) fn finish(&self) {
+        if self.tty && self.shown > 0 {
+            eprint!("\r\x1b[2K");
+        }
+    }
+}
+
 /// PATH 里有没有能用的 ffmpeg。
 pub(crate) async fn has_ffmpeg() -> bool {
     tokio::process::Command::new("ffmpeg")

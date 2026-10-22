@@ -19,6 +19,10 @@ and available quality options.
 
 ---
 
+<img src="docs/demo.svg" alt="alcedo demo: downloading from a pasted Douyin share blurb, then a YouTube video at 1080p with audio and video merged" width="100%">
+
+<sub>Recorded from real runs (network waits over 2 s are shortened to 2 s); re-record with [`scripts/record-demo.py`](scripts/record-demo.py). CLI messages are in Chinese.</sub>
+
 ```console
 $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 平台  : YouTube
@@ -35,14 +39,27 @@ $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
 *Alcedo* is a genus of kingfishers.
 
+- [Features](#features)
+- [Supported platforms](#supported-platforms)
+- [Quick start](#quick-start)
+- [Output format](#output-format)
+- [Configuration](#configuration)
+- [Request controls](#request-controls-and-access-restrictions)
+- [Result cache](#result-cache)
+- [Hedged requests](#hedged-requests)
+- [Limitations](#limitations)
+- [Development](#development)
+
 ## Features
 
-- **35 platforms**: supports the Chinese and international sites listed below.
-- **Native Rust**: built-in extraction paths do not require Python, Node or a headless browser.
-- **Consistent output**: shared data structures for media URLs, galleries, Live Photos and author information.
-- **Multiple qualities**: returns available formats, including 4K, AV1, H.265 and audio-only where provided; identifies separate audio and video tracks.
-- **Structured errors**: distinguishes unavailable content, sign-in requirements, rate limits and network failures.
-- **Request controls**: reuses HTTP connections, limits requests per platform and enables private-address checks by default.
+| Feature | Details |
+| --- | --- |
+| 35 platforms | Supports the Chinese and international sites listed below |
+| Native Rust | Built-in extraction paths do not require Python, Node or a headless browser |
+| Consistent output | Shared data structures for media URLs, galleries, Live Photos and author information |
+| Multiple qualities | Returns available formats, including 4K, AV1, H.265 and audio-only where provided; identifies separate audio and video tracks |
+| Structured errors | Distinguishes unavailable content, sign-in requirements, rate limits and network failures |
+| Request controls | Reuses HTTP connections, limits requests per platform and enables private-address checks by default |
 
 ## Supported platforms
 
@@ -104,11 +121,30 @@ alcedo --json "https://..."                # JSON
 alcedo --list                              # supported platforms
 ```
 
-You can paste a whole share blurb from an app — the link is pulled out for you:
+You can also paste a whole share blurb from an app; the link is pulled out for you:
 
 ```bash
 alcedo "7.99 复制打开抖音，看看【作者】的作品 https://v.douyin.com/iRNBho6u/ 很好看"
 ```
+
+### Download
+
+The `download` subcommand saves the result locally. It streams media with the request
+headers the CDN expects, merges separate audio/video formats and HLS with ffmpeg, and
+saves galleries with their Live Photos in pairs (`01.jpg` + `01.mov`).
+
+```bash
+alcedo download "https://v.douyin.com/xxxxxx/"           # default format
+alcedo download <link> --list                            # list available formats
+alcedo download <link> --format 1080p --dir ~/Videos     # pick a format and a folder
+alcedo download <link> --best                            # highest quality
+alcedo download <link> --music                           # background music only
+```
+
+When the default format is an HLS playlist (common on YouTube), segments are fetched
+concurrently and joined into an mp4, up to 1080p. If a separate-track download fails and
+the result has an HLS playlist, it switches to HLS at the same height. Merging audio and
+video needs ffmpeg on PATH.
 
 ### Long-running server
 
@@ -131,11 +167,24 @@ Success returns 200 with the JSON described in [Output format](#output-format); 
 return a matching status code and `{"reason": "...", "message": "...", "detail": "..."}`,
 where `reason` is one of the values in [Error handling](#error-handling).
 
+With `media=1`, the response gains a `media` field that maps each direct URL to a signed
+`/media?...` link, valid for 6 hours. Use it directly in a browser's `<video>` or `<img>`:
+the server adds the Referer and other headers the CDN expects, passes Range through for
+seeking, and fetches YouTube media in 10 MB ranges. `/media` does not check the token; the
+signature is the authorisation.
+
+```bash
+curl "127.0.0.1:7878/parse?media=1&url=https%3A%2F%2Fv.douyin.com%2Fxxxxxx%2F"
+```
+
 - `--prewarm` / `ALCEDO_PREWARM`: warm these platforms' connections at startup and touch
   them again every 4 minutes so an idle pool is never reclaimed. Defaults to
   `douyin,bilibili,redbook`; `none` disables it.
+- `--listen` / `ALCEDO_LISTEN`: listen address, `127.0.0.1:7878` by default.
 - `ALCEDO_SERVE_TOKEN`: when set, requests must carry `Authorization: Bearer <token>`.
   Always set it when listening on a public address.
+- `ALCEDO_MEDIA_SECRET`: signing key for `/media` links. When unset, a random key is
+  generated at startup and old links stop working after a restart.
 
 ### As a library
 
@@ -283,6 +332,7 @@ Whether the request succeeds still depends on the platform response.
 Addresses that resolve to private networks are blocked at the DNS layer (SSRF
 protection). Private records are dropped from the answer and only the remaining
 public addresses are used; a host is rejected only when every record is private.
+
 Fake-ip proxies such as Clash, Surge, sing-box and mihomo (`198.18.0.0/15`, plus
 ULA AAAA records when IPv6 is on, e.g. sing-box's default `fc00::/18` and
 mihomo's `fdfe:dcba:9876::/64`) do **not** need this check disabled. Set
@@ -298,9 +348,8 @@ and address checks.
 On by default with a 5-minute TTL. Popular content gets parsed repeatedly in short
 windows; a cache hit takes **0 ms**.
 
-The critical constraint is **never serving an already-dead URL** — that's worse than
-being slow, because the user gets a 403 and no reason to retry. So the TTL isn't a
-guess; it's read off the direct URL itself:
+A cached result must not outlive its direct URLs: after a URL expires, the user gets a
+403 and no reason to retry. So the TTL is read off the direct URL itself:
 
 | Platform | Where the expiry lives | Measured lifetime |
 | --- | --- | --- |
@@ -349,10 +398,11 @@ Compare p90 between the two. Put the threshold between p50 and p90.
 ## Limitations
 
 - Platform support does not imply support for every content type. Sign-in status, region and API changes affect results.
-- The library returns media information and URLs. Callers handle downloading, HLS processing and merging separate audio and video tracks. The CLI's `download` does these for you: it fetches HLS (VOD, unencrypted) segments concurrently and stitches them, merges separate audio and video with ffmpeg, and falls back to HLS at the same height when a separate-track download fails and the result has an HLS playlist.
+- The library returns media information and URLs. Callers handle downloading, HLS and merging separate audio and video. The CLI's `alcedo download` does these; see [Download](#download).
 - Watermarks, quality and codecs depend on the media URLs the platform provides. Some content has only galleries, audio or separate tracks.
 - Rate limiting, guest identities and external signers do not guarantee access through platform restrictions.
-- YouTube requests carry a visitor identity (visitorData), which usually gets exits such as WARP past the bot check; they still fail when the exit IP itself is banned or temporarily flagged, and then you need a different exit. YouTube media links are bound to the exit IP used for parsing and return 403 from any other exit; `download` and `serve /media` use the same `ALCEDO_PROXY` and fetch in 10 MB ranges (a single whole-file request is throttled below 1 MB/s). Other programs downloading these links directly should do the same.
+- YouTube gets past the bot check from datacenter and WARP exits with a guest identity. It still fails when the exit IP itself is banned or temporarily flagged; then you need a different exit.
+- YouTube media URLs are bound to the exit IP used for parsing, and whole-file requests are throttled. To download them yourself, use the same exit and request Range chunks; `download` and `serve /media` already do.
 
 ## Development
 

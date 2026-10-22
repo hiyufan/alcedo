@@ -228,6 +228,7 @@ async fn download_video(info: &VideoInfo, opts: &Options) -> Result<(), String> 
                 &stem_of(info),
                 "mp4",
                 "视频",
+                true,
             )
             .await
             .map(|_| ())
@@ -253,6 +254,7 @@ async fn download_music(info: &VideoInfo, dir: &str) -> Result<(), String> {
         &stem_of(info),
         "m4a",
         "音乐",
+        true,
     )
     .await
     .map(|_| ())
@@ -275,6 +277,7 @@ async fn download_gallery(info: &VideoInfo, dir: &str) -> Result<(), String> {
             &stem,
             "jpg",
             &what,
+            true,
         )
         .await?;
         if !img.live_photo_url.is_empty() {
@@ -285,6 +288,7 @@ async fn download_gallery(info: &VideoInfo, dir: &str) -> Result<(), String> {
                 &stem,
                 "mov",
                 &format!("{what} 的实况视频"),
+                true,
             )
             .await?;
         }
@@ -357,6 +361,7 @@ async fn fetch_to_file(
     stem: &str,
     fallback_ext: &str,
     what: &str,
+    keep: bool,
 ) -> Result<PathBuf, String> {
     let (content_type, total, mut stream) = open_media(url, headers)
         .await
@@ -370,27 +375,30 @@ async fn fetch_to_file(
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
     let mut got: u64 = 0;
-    let mut shown: u8 = 0;
+    let mut progress = media::Progress::new(what);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("{what}下载中断: {e}"))?;
         file.write_all(chunk.as_ref())
             .await
             .map_err(|e| format!("写文件 {} 失败: {e}", path.display()))?;
         got += chunk.len() as u64;
-        if let Some(total) = total.filter(|t| *t > 0) {
-            let tenth = u8::try_from(got * 10 / total).unwrap_or(9).min(9);
-            if tenth > shown {
-                shown = tenth;
-                eprint!("\r{what} {:>3}%", tenth * 10);
-            }
-        }
+        progress.update(got, total.unwrap_or(0));
     }
     file.flush().await.map_err(|e| format!("写文件失败: {e}"))?;
-    if shown > 0 {
-        eprintln!();
+    progress.finish();
+    if keep {
+        println!("{what} → {}（{:.1} MB）", path.display(), got as f64 / 1e6);
+    } else {
+        // 临时轨合并完就删，路径对用户没用
+        println!("{what} {:.1} MB", got as f64 / 1e6);
     }
-    println!("{what} → {}（{:.1} MB）", path.display(), got as f64 / 1e6);
     Ok(path)
+}
+
+/// 临时轨的文件名。不能用"标题 + [视频轨]"：文件名掐到 60 个字符，标题一长后缀就被掐掉，
+/// 临时轨和成品同名，成品只好让成"标题 (2).mp4"。
+fn track_stem(kind: &str) -> String {
+    format!("alcedo-{}-{kind}", std::process::id())
 }
 
 /// 分别下视频轨和音频轨。任何一条失败都不留半截文件。
@@ -404,18 +412,20 @@ async fn fetch_tracks(
         video_url,
         headers_for(info, video_url),
         dir,
-        &format!("{} [视频轨]", stem_of(info)),
+        &track_stem("video"),
         "mp4",
         "视频轨",
+        false,
     )
     .await?;
     match fetch_to_file(
         audio_url,
         headers_for(info, audio_url),
         dir,
-        &format!("{} [音频轨]", stem_of(info)),
+        &track_stem("audio"),
         "m4a",
         "音频轨",
+        false,
     )
     .await
     {
@@ -520,6 +530,17 @@ mod tests {
             .is_err(),
             "--best 和 --format 互斥"
         );
+    }
+
+    #[test]
+    fn track_files_never_take_the_final_name() {
+        // 标题长到被掐掉后缀时，临时轨也不能和成品同名
+        let title = "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)";
+        let final_name = media::safe_filename(title, "media");
+        for kind in ["video", "audio"] {
+            assert_ne!(media::safe_filename(&track_stem(kind), "media"), final_name);
+        }
+        assert_ne!(track_stem("video"), track_stem("audio"));
     }
 
     #[test]

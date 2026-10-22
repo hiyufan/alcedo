@@ -282,7 +282,8 @@ async fn fetch_segments(
     let mut parts = futures_util::stream::iter(urls)
         .map(|u| fetch_segment(u, headers))
         .buffered(CONCURRENCY);
-    let (mut done, mut bytes, mut shown) = (0_usize, 0_u64, 0_usize);
+    let (mut done, mut bytes) = (0_usize, 0_u64);
+    let mut progress = media::Progress::new(what);
     while let Some(part) = parts.next().await {
         let part = part.map_err(|e| format!("{what}第 {} 段: {e}", done + 1))?;
         file.write_all(&part)
@@ -290,14 +291,11 @@ async fn fetch_segments(
             .map_err(|e| format!("写文件 {} 失败: {e}", path.display()))?;
         done += 1;
         bytes += part.len() as u64;
-        let tenth = done * 10 / total;
-        if tenth > shown {
-            shown = tenth;
-            eprint!("\r{what} {:>3}%", tenth * 10);
-        }
+        progress.update(done as u64, total as u64);
     }
     file.flush().await.map_err(|e| format!("写文件失败: {e}"))?;
-    eprintln!("\r{what} {total} 段，{:.1} MB", bytes as f64 / 1e6);
+    progress.finish();
+    println!("{what} {total} 段，{:.1} MB", bytes as f64 / 1e6);
     Ok(())
 }
 

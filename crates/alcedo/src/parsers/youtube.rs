@@ -12,11 +12,17 @@
 //! 客户端按"不需要 JS 且当前仍免 PO Token"的顺序试：`visionos` 目前最稳，
 //! `ios` / `android_vr` / `tv` 作为后备。哪天 YouTube 对某个客户端加了限制，
 //! 只要挪一下本文件里 `CLIENTS` 的顺序，不用改解析逻辑。
+//!
+//! ## 游客身份
+//!
+//! 每个请求都带上 visitorData（见 [`identity::youtube_visitor`]）。不带的话机房、
+//! WARP 这类出口一律被要求"确认不是机器人"，带上就过。机房 IP 本身被封时带了也
+//! 没用，那得换出口。
 
 use serde_json::{json, Value};
 
 use crate::error::{Error, Reason, Result};
-use crate::http::{Http, Req};
+use crate::http::{identity, Http, Req};
 use crate::model::{Author, Format, VideoInfo};
 use crate::util;
 
@@ -84,9 +90,10 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     // 只拿到 HLS 清单、没有可下载档位的结果。能播但没法选清晰度、没法下载，
     // 所以先扣下来继续问下一个客户端，全都不行了再拿它顶上。
     let mut degraded: Option<VideoInfo> = None;
+    let visitor = identity::youtube_visitor(http).await;
 
     for client in CLIENTS {
-        let outcome = match player(http, client, video_id).await {
+        let outcome = match player(http, client, video_id, visitor.as_deref()).await {
             Ok(resp) => build(&resp, video_id),
             Err(e) => Err(e),
         };
@@ -112,27 +119,22 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     if let Some(info) = degraded {
         return Ok(info);
     }
+    if last.as_ref().is_some_and(|e| e.reason == Reason::Blocked) {
+        // 这份身份可能被风控标记了，下次换一份。不在这里立刻重试：出口 IP 被封时
+        // 换身份也没用，只会让失败的请求多等一轮
+        identity::forget_youtube();
+    }
     Err(last.unwrap_or_else(|| Error::parse("所有 InnerTube 客户端都没拿到播放数据")))
 }
 
-async fn player(http: &Http, client: &ClientSpec, video_id: &str) -> Result<Value> {
-    // 手拼 context 里的 client 段：extra 是各客户端特有的字段，
-    // 拼字符串比为每个客户端造一个 struct 省事得多。
-    //
-    // hl 固定 en：`playabilityStatus.reason` 的文案要拿来分类，跟着语言变的话
-    // 匹配规则就得跟着 YouTube 的每一种翻译走。面向用户的中文文案是我们自己出的，
-    // 这里只需要一份稳定的英文原文。
-    let client_json = format!(
-        r#"{{"clientName":"{}","clientVersion":"{}","hl":"en","gl":"US"{}{}}}"#,
-        client.name,
-        client.version,
-        if client.extra.is_empty() { "" } else { "," },
-        client.extra
-    );
-    let client_value: Value = serde_json::from_str(&client_json)?;
-
+async fn player(
+    http: &Http,
+    client: &ClientSpec,
+    video_id: &str,
+    visitor: Option<&str>,
+) -> Result<Value> {
     let body = json!({
-        "context": { "client": client_value },
+        "context": { "client": context_client(client, visitor)? },
         "videoId": video_id,
         // 这两个是"我知道内容可能敏感，照给"，少了会对部分视频返回空
         "contentCheckOk": true,
@@ -148,6 +150,9 @@ async fn player(http: &Http, client: &ClientSpec, video_id: &str) -> Result<Valu
         .json_body(&body)
         // player 接口只读
         .idempotent();
+    if let Some(v) = visitor {
+        req = req.header("X-Goog-Visitor-Id", v);
+    }
     if let Some(c) = http.config().youtube_cookie.as_deref() {
         req = req.cookie_header(c);
     }
@@ -155,6 +160,27 @@ async fn player(http: &Http, client: &ClientSpec, video_id: &str) -> Result<Valu
     let resp = http.send(req).await?;
     resp.error_for_status()?;
     resp.json()
+}
+
+/// `context.client`：手拼 JSON，extra 是各客户端特有的字段，
+/// 拼字符串比为每个客户端造一个 struct 省事得多。
+///
+/// hl 固定 en：`playabilityStatus.reason` 的文案要拿来分类，跟着语言变的话
+/// 匹配规则就得跟着 YouTube 的每一种翻译走。面向用户的中文文案是我们自己出的，
+/// 这里只需要一份稳定的英文原文。
+fn context_client(client: &ClientSpec, visitor: Option<&str>) -> Result<Value> {
+    let client_json = format!(
+        r#"{{"clientName":"{}","clientVersion":"{}","hl":"en","gl":"US"{}{}}}"#,
+        client.name,
+        client.version,
+        if client.extra.is_empty() { "" } else { "," },
+        client.extra
+    );
+    let mut value: Value = serde_json::from_str(&client_json)?;
+    if let (Some(v), Some(obj)) = (visitor, value.as_object_mut()) {
+        obj.insert("visitorData".into(), Value::String(v.to_owned()));
+    }
+    Ok(value)
 }
 
 fn build(resp: &Value, video_id: &str) -> Result<VideoInfo> {
@@ -452,6 +478,18 @@ mod tests {
         assert!(is_valid_id("_-aBcDeFgH1"));
         assert!(!is_valid_id("dQw4w9WgXc")); // 10 位
         assert!(!is_valid_id("dQw4w9WgXc!"));
+    }
+
+    #[test]
+    fn every_client_carries_the_visitor_identity() {
+        for client in CLIENTS {
+            let with = context_client(client, Some("CgtWaXNpdG9y")).unwrap();
+            assert_eq!(with["visitorData"], "CgtWaXNpdG9y", "{}", client.name);
+            assert_eq!(with["clientName"], client.name);
+            assert_eq!(with["hl"], "en", "reason 的文案要拿来分类，语言必须固定");
+            let without = context_client(client, None).unwrap();
+            assert!(without.get("visitorData").is_none(), "{}", client.name);
+        }
     }
 
     #[test]

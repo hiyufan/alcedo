@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use alcedo::{Format, Source, VideoInfo};
 
-use crate::media;
+use crate::{media, ranged};
 
 pub(crate) struct Options {
     input: String,
@@ -355,34 +355,17 @@ async fn fetch_to_file(
     fallback_ext: &str,
     what: &str,
 ) -> Result<PathBuf, String> {
-    let resp = media::client()
-        .get(url)
-        .headers(headers)
-        .send()
+    let (content_type, total, mut stream) = open_media(url, headers)
         .await
         .map_err(|e| format!("{what}下载失败: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "{what}下载失败: CDN 返回 HTTP {}",
-            resp.status().as_u16()
-        ));
-    }
-    let ext = media::pick_ext(
-        resp.headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok()),
-        url,
-        fallback_ext,
-    );
+    let ext = media::pick_ext(content_type.as_deref(), url, fallback_ext);
     let path = unique_path(dir, &media::safe_filename(stem, "media"), &ext);
-    let total = resp.content_length();
     let mut file = tokio::fs::File::create(&path)
         .await
         .map_err(|e| format!("写文件 {} 失败: {e}", path.display()))?;
 
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
-    let mut stream = resp.bytes_stream();
     let mut got: u64 = 0;
     let mut shown: u8 = 0;
     while let Some(chunk) = stream.next().await {
@@ -405,6 +388,50 @@ async fn fetch_to_file(
     }
     println!("{what} → {}（{:.1} MB）", path.display(), got as f64 / 1e6);
     Ok(path)
+}
+
+/// 打开直链：(Content-Type, 总大小, 内容流)。googlevideo 按段拉（整段请求会被限速，
+/// 见 [`crate::ranged`]），其余一个请求流式拉完。
+async fn open_media(
+    url: &str,
+    headers: reqwest::header::HeaderMap,
+) -> Result<(Option<String>, Option<u64>, ranged::ByteStream), String> {
+    use futures_util::StreamExt;
+
+    let client = media::client_for(url);
+    let resp = if media::is_googlevideo(url) {
+        match ranged::open(client, url, headers, 0, None)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            Ok(r) => {
+                let ct = r.headers.get("content-type").and_then(|v| v.to_str().ok());
+                return Ok((ct.map(str::to_owned), Some(r.total), r.body));
+            }
+            // CDN 没按 Range 回 206：就用这个响应，按普通下载处理
+            Err(resp) => resp,
+        }
+    } else {
+        client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    if !resp.status().is_success() {
+        return Err(format!("CDN 返回 HTTP {}", resp.status().as_u16()));
+    }
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let total = resp.content_length();
+    let body = resp
+        .bytes_stream()
+        .map(|r| r.map_err(std::io::Error::other));
+    Ok((ct, total, Box::pin(body)))
 }
 
 /// 重名避让：`名.ext` 存在就试 `名 (2).ext`、`名 (3).ext`……

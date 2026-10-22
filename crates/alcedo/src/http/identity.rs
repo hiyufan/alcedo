@@ -159,12 +159,97 @@ pub fn forget_bytedance() {
     TTWID.forget();
 }
 
+/// YouTube 的游客身份（visitorData）。没有它的 InnerTube 请求从机房 / WARP 出口一律
+/// 报"确认不是机器人"；带上就过（2026-10-22 经 WARP 实测 3 条受限视频：不带全拦，
+/// 带上全 OK、直链可读）。网页首次访问时 `ytcfg.VISITOR_DATA` 就是这个值。
+static YOUTUBE_VISITOR: IdentitySlot = IdentitySlot::new(Duration::from_secs(1800));
+
+/// YouTube 的游客身份。拿不到就返回 `None`，照常裸请求。
+///
+/// 进程内只缓存一份：visitorData 带着领取时出口的国家，配了不同代理的多个
+/// [`crate::Client`] 共用同一份（和 ttwid 一样）。
+pub async fn youtube_visitor(http: &Http) -> Option<String> {
+    YOUTUBE_VISITOR
+        .get_or_fetch(
+            http,
+            |http| async move { fetch_youtube_visitor(&http).await },
+        )
+        .await
+}
+
+/// 清掉 YouTube 的游客身份。所有客户端都报机器人校验时调一次，下次重新领。
+pub fn forget_youtube() {
+    YOUTUBE_VISITOR.forget();
+}
+
+async fn fetch_youtube_visitor(http: &Http) -> Option<String> {
+    // sw.js_data 是网页 service worker 取配置的接口，几百字节，比开整个首页（约 1 MB）
+    // 省得多；YouTube.js 也从这里取
+    let resp = http
+        .send(
+            Req::get("https://www.youtube.com/sw.js_data")
+                .header("User-Agent", ua::DESKTOP_FIXED)
+                .idempotent(),
+        )
+        .await
+        .ok()?;
+    let visitor = parse_sw_js_data(&resp.text())?;
+    tracing::debug!("领到新的 YouTube visitorData");
+    Some(visitor)
+}
+
+/// 从 sw.js_data 里取 visitorData：`)]}'` 防劫持前缀之后是 JSON 数组，
+/// 设备信息 `[0][2][0][0]` 的第 13 项就是它，`[0][2][6]` 是同一个值。
+fn parse_sw_js_data(body: &str) -> Option<String> {
+    let json = body.trim_start().strip_prefix(")]}'").unwrap_or(body);
+    let data: serde_json::Value = serde_json::from_str(json.trim_start()).ok()?;
+    let visitor = [data.pointer("/0/2/0/0/13"), data.pointer("/0/2/6")]
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        // 要原样放进请求头，长度和字符都卡一下，别把一段奇怪的 JSON 塞进去
+        .find(|v| {
+            (16..=2048).contains(&v.len())
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'%' | b'='))
+        })
+        .map(str::to_owned);
+    visitor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn http() -> Http {
         Http::new(std::sync::Arc::new(crate::Config::default()), None).unwrap()
+    }
+
+    #[test]
+    fn visitor_data_is_read_from_sw_js_data() {
+        // 真实响应的最小骨架（值是假的）
+        let body = r#")]}'
+[["yt.sw.adr",null,[[["en","US",null,"2001:db8::1",null,null,null,null,null,null,null,"Apple","","CgtWaXNpdG9yRGF0YSiow-bWBjIKCgJVUxIEGgAg"]],null,null,null,null,"CgtWaXNpdG9yRGF0YSiow-bWBjIKCgJVUxIEGgAg"]]]"#;
+        assert_eq!(
+            parse_sw_js_data(body).as_deref(),
+            Some("CgtWaXNpdG9yRGF0YSiow-bWBjIKCgJVUxIEGgAg")
+        );
+        // 第 13 项挪了位置，还能从 [0][2][6] 取到
+        let moved = r#")]}'
+[["yt.sw.adr",null,[[["en"]],null,null,null,null,null,"CgtBbm90aGVyVmFsdWUiow-bWBj"]]]"#;
+        assert_eq!(
+            parse_sw_js_data(moved).as_deref(),
+            Some("CgtBbm90aGVyVmFsdWUiow-bWBj")
+        );
+        assert_eq!(parse_sw_js_data("<html>oops</html>"), None);
+        assert_eq!(
+            parse_sw_js_data(
+                r#")]}'
+[["x",null,[[[0,1,2,3,4,5,6,7,8,9,10,11,12,"has space\r\nX-Evil: 1"]]]]]"#
+            ),
+            None,
+            "不像 visitorData 的值不能塞进请求头"
+        );
     }
 
     #[tokio::test]

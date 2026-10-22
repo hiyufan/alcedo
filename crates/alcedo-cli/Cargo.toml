@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 futures-util = { workspace = true, features = ["std"] }
+bytes = { workspace = true }
 # download / serve /media 都要自己拉媒体流：连接池、读超时、不跟跳转的
 # 客户端在这里，与解析库的连接池分开（大流量长流，策略完全不同）
 reqwest = { workspace = true, features = ["rustls-no-provider", "http2", "stream"] }

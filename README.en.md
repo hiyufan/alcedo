@@ -245,7 +245,7 @@ start with environment settings before changing individual fields.
 
 | Variable | What it does | Default |
 | --- | --- | --- |
-| `ALCEDO_PROXY` | Proxy for every platform, e.g. `http://127.0.0.1:7890`, `socks5://...` | none |
+| `ALCEDO_PROXY` | Proxy for every platform, e.g. `http://127.0.0.1:7890`, `socks5://...`. `download` and `serve /media` also fetch YouTube media through it (the links are bound to the exit IP used for parsing) | none |
 | `ALCEDO_PROXY_CN` | Preferred proxy for Chinese platforms; falls back to `ALCEDO_PROXY` when unset | none |
 | `ALCEDO_RELAY_CN` | Mainland-China egress relay (a forwarding function on a Chinese edge platform, e.g. `https://example.com/relay`); when set, parse requests for Chinese platforms go through it, taking precedence over `ALCEDO_PROXY_CN` | none |
 | `ALCEDO_RELAY_TOKEN` | Auth token for the relay; must match `TOKEN` in the relay function | none |
@@ -352,6 +352,7 @@ Compare p90 between the two. Put the threshold between p50 and p90.
 - The library returns media information and URLs. Callers handle downloading, HLS processing and merging separate audio and video tracks.
 - Watermarks, quality and codecs depend on the media URLs the platform provides. Some content has only galleries, audio or separate tracks.
 - Rate limiting, guest identities and external signers do not guarantee access through platform restrictions.
+- YouTube requests carry a visitor identity (visitorData), which usually gets exits such as WARP past the bot check; they still fail when the exit IP itself is banned or temporarily flagged, and then you need a different exit. YouTube media links are bound to the exit IP used for parsing and return 403 from any other exit; `download` and `serve /media` use the same `ALCEDO_PROXY` and fetch in 10 MB ranges (a single whole-file request is throttled below 1 MB/s). Other programs downloading these links directly should do the same.
 
 ## Development
 

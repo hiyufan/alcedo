@@ -235,7 +235,7 @@ let client = Client::with_config(Config {
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `ALCEDO_PROXY` | 所有平台的代理，如 `http://127.0.0.1:7890`、`socks5://...` | 无 |
+| `ALCEDO_PROXY` | 所有平台的代理，如 `http://127.0.0.1:7890`、`socks5://...`。`download` 和 `serve /media` 拉 YouTube 媒体时也走它（直链绑定解析时的出口 IP） | 无 |
 | `ALCEDO_PROXY_CN` | 国内平台优先使用的代理，未设置时使用 `ALCEDO_PROXY` | 无 |
 | `ALCEDO_RELAY_CN` | 国内出口中转地址（部署在国内边缘函数上的转发函数，如 `https://example.com/relay`），配置后国内平台的解析请求都经它发出，优先于 `ALCEDO_PROXY_CN` | 无 |
 | `ALCEDO_RELAY_TOKEN` | 中转的鉴权令牌，与中转函数里的 `TOKEN` 一致 | 无 |
@@ -325,6 +325,7 @@ ALCEDO_HEDGE_AFTER_MS=300 cargo run --release -p alcedo --example bench -- <url>
 - 本项目返回媒体信息和地址，下载、HLS 处理及分离音视频轨的合并由调用方完成。
 - 水印、清晰度和编码取决于平台提供的媒体地址；部分内容只有图集、音频或分离的音视频轨。
 - 限流、游客身份和外部签名器不能保证通过平台的访问限制。
+- YouTube 会带上游客身份（visitorData）请求，WARP 这类出口通常就能通过机器人校验；出口 IP 本身被封或被临时标记时仍会失败，需要换出口。YouTube 的直链绑定解析时的出口 IP，换出口拉取会 403；`download` 和 `serve /media` 会用同一个 `ALCEDO_PROXY` 并按 10 MB 分段拉取（整段请求会被限速到 1 MB/s 以下），其他程序直接下载时也要这样做。
 
 ## 开发
 

@@ -42,7 +42,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
-use crate::media;
+use crate::{media, ranged};
 
 /// 默认只听本机：这是给同机上的网站调的，不是公网服务。
 const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
@@ -466,8 +466,14 @@ async fn media(
             out_headers.insert(name, val);
         }
     }
-    let mut upstream = media::client().get(parsed).headers(out_headers);
-    if let Some(range) = headers.get("range").and_then(|v| v.to_str().ok()) {
+    let range = headers.get("range").and_then(|v| v.to_str().ok());
+    if media::is_googlevideo(&q.url) {
+        if let Some(resp) = ranged_media(&state, &q.url, &out_headers, range).await {
+            return resp;
+        }
+    }
+    let mut upstream = media::client_for(&q.url).get(parsed).headers(out_headers);
+    if let Some(range) = range {
         upstream = upstream.header("range", range);
     }
     let resp = match upstream.send().await {
@@ -521,6 +527,75 @@ async fn media(
         chunk
     }));
     (status, out, body).into_response()
+}
+
+/// googlevideo 整段拉会被限速（见 [`crate::ranged`]）：没带 Range 或 `bytes=N-` 这类
+/// 大跨度请求，背后按段拉、拼成一条流交给浏览器。返回 `None` 时按普通转发处理
+/// （一段以内的请求、CDN 没回 206 之类）。
+async fn ranged_media(
+    state: &AppState,
+    url: &str,
+    upstream_headers: &HeaderMap,
+    range: Option<&str>,
+) -> Option<Response> {
+    let (start, end) = ranged::wanted_range(range)?;
+    let opened = ranged::open(
+        media::client_for(url),
+        url,
+        upstream_headers.clone(),
+        start,
+        end,
+    )
+    .await;
+    let r = match opened {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => return None,
+        Err(e) => {
+            return Some(
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"reason": "network", "message": format!("拉取失败: {e}")})),
+                )
+                    .into_response(),
+            )
+        }
+    };
+
+    let mut out = HeaderMap::new();
+    for key in ["content-type", "etag", "last-modified"] {
+        if let Some(v) = r.headers.get(key) {
+            out.insert(key, v.clone());
+        }
+    }
+    out.insert("content-length", HeaderValue::from(r.len()));
+    out.insert("accept-ranges", HeaderValue::from_static("bytes"));
+    out.insert(
+        "cache-control",
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+    // 浏览器没要 Range 就给完整的 200；要了就按它要的范围回 206
+    let status = if range.is_some() {
+        let v = format!("bytes {}-{}/{}", r.start, r.end, r.total);
+        out.insert("content-range", HeaderValue::from_str(&v).ok()?);
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+
+    let Ok(permit) = state.media_streams.clone().try_acquire_owned() else {
+        return Some(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"reason": "blocked", "message": "转发通道满了，稍后再试"})),
+            )
+                .into_response(),
+        );
+    };
+    let body = Body::from_stream(r.body.map(move |chunk| {
+        let _permit = &permit;
+        chunk
+    }));
+    Some((status, out, body).into_response())
 }
 
 fn forbidden(message: &str) -> Response {

@@ -16,6 +16,7 @@ use alcedo::{Client, Source, VideoInfo};
 
 mod download;
 mod media;
+mod ranged;
 mod serve;
 
 fn main() -> ExitCode {

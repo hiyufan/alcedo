@@ -47,6 +47,7 @@ version = "0.3.0"
 dependencies = [
  "alcedo",
  "axum",
+ "bytes",
  "futures-util",
  "hmac",
  "reqwest",

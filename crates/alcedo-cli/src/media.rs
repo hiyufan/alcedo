@@ -16,20 +16,53 @@ use alcedo::http::ua;
 /// 就算 URL 被构造出来指向内网，也在解析层拦住。
 pub(crate) fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        alcedo::http::ensure_crypto_provider();
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(30))
-            .pool_idle_timeout(Duration::from_secs(300))
-            .pool_max_idle_per_host(8)
-            .redirect(reqwest::redirect::Policy::none())
-            .dns_resolver(std::sync::Arc::new(alcedo::http::ssrf::SafeResolver::new(
-                true,
-            )))
-            .build()
-            .expect("媒体客户端构建失败")
-    })
+    CLIENT.get_or_init(|| build(None).expect("媒体客户端构建失败"))
+}
+
+/// 拉这条直链用哪个客户端。
+///
+/// googlevideo 的地址带着解析时出口的 IP（`ip=` 参数），换个出口去拉就 403，
+/// 所以它和解析一样走 `ALCEDO_PROXY`。国内 CDN 的地址不绑 IP，照旧直连，
+/// 大文件不必绕代理。
+pub(crate) fn client_for(url: &str) -> &'static reqwest::Client {
+    static PROXIED: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    if !is_googlevideo(url) {
+        return client();
+    }
+    PROXIED
+        .get_or_init(|| {
+            let proxy = alcedo::Config::from_env().proxy?;
+            build(Some(&proxy))
+                .inspect_err(|e| eprintln!("ALCEDO_PROXY 用不了，YouTube 媒体改为直连: {e}"))
+                .ok()
+        })
+        .as_ref()
+        .unwrap_or_else(client)
+}
+
+/// YouTube 的媒体 CDN。它的直链绑出口 IP、整段拉还会被限速（见 [`crate::ranged`]）。
+pub(crate) fn is_googlevideo(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|h| h.ends_with(".googlevideo.com"))
+}
+
+fn build(proxy: Option<&str>) -> Result<reqwest::Client, reqwest::Error> {
+    alcedo::http::ensure_crypto_provider();
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(300))
+        .pool_max_idle_per_host(8)
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(std::sync::Arc::new(alcedo::http::ssrf::SafeResolver::new(
+            true,
+        )));
+    if let Some(p) = proxy {
+        builder = builder.proxy(reqwest::Proxy::all(p)?);
+    }
+    builder.build()
 }
 
 /// 直链请求头：固定桌面 UA（签名接口要求 UA 跨请求一致）+ 按 CDN 域名补
@@ -145,6 +178,19 @@ mod tests {
             pick_ext(None, "https://x/82b540c91294c68c/2f3a4b5c/video", "mp4"),
             "mp4"
         );
+    }
+
+    #[test]
+    fn only_googlevideo_needs_the_parse_exit() {
+        assert!(is_googlevideo(
+            "https://rr5---sn-2oq4f5-cv.googlevideo.com/videoplayback?ip=1.2.3.4"
+        ));
+        assert!(is_googlevideo(
+            "https://RR1---SN-X.GOOGLEVIDEO.COM/videoplayback"
+        ));
+        assert!(!is_googlevideo("https://googlevideo.com.evil.example/x"));
+        assert!(!is_googlevideo("https://v11.365yg.com/a.mp4"));
+        assert!(!is_googlevideo("not a url"));
     }
 
     #[test]

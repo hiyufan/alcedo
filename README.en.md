@@ -19,6 +19,10 @@ and available quality options.
 
 ---
 
+<img src="docs/demo.svg" alt="alcedo demo: downloading from a pasted Douyin share blurb, then a YouTube video at 1080p with audio and video merged" width="100%">
+
+<sub>Recorded from real runs (network waits over 2 s are shortened to 2 s); re-record with [`scripts/record-demo.py`](scripts/record-demo.py). CLI messages are in Chinese.</sub>
+
 ```console
 $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 平台  : YouTube

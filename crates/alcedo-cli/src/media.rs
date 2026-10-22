@@ -48,6 +48,53 @@ pub(crate) fn is_googlevideo(url: &str) -> bool {
         .is_some_and(|h| h.ends_with(".googlevideo.com"))
 }
 
+/// 手动跟 3xx 的跳数上限。
+const MAX_HOPS: usize = 5;
+
+/// GET，并手动跟跳转。
+///
+/// 媒体客户端不自动跟跳转（见模块说明），但 googlevideo 的分轨和 HLS 分片会先 302 到
+/// 另一台节点，不跟就拿不到内容。这里每一跳都过 SSRF 的地址检查，DNS 那一层照旧由
+/// `SafeResolver` 管；同一家 CDN 内的跳转用同一个客户端（同一个出口）。
+pub(crate) async fn send_following(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &HeaderMap,
+) -> Result<reqwest::Response, String> {
+    let mut url = url::Url::parse(url).map_err(|e| format!("地址无效: {e}"))?;
+    for _ in 0..=MAX_HOPS {
+        let resp = client
+            .get(url.clone())
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_redirection() {
+            return Ok(resp);
+        }
+        let Some(location) = resp.headers().get("location").and_then(|v| v.to_str().ok()) else {
+            return Ok(resp);
+        };
+        let next = url
+            .join(location)
+            .map_err(|e| format!("跳转地址无效: {e}"))?;
+        if !alcedo::http::ssrf::url_allowed(&next) {
+            return Err("跳转到了不允许的地址".into());
+        }
+        url = next;
+    }
+    Err(format!("跳转超过 {MAX_HOPS} 次"))
+}
+
+/// PATH 里有没有能用的 ffmpeg。
+pub(crate) async fn has_ffmpeg() -> bool {
+    tokio::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .await
+        .is_ok_and(|o| o.status.success())
+}
+
 fn build(proxy: Option<&str>) -> Result<reqwest::Client, reqwest::Error> {
     alcedo::http::ensure_crypto_provider();
     let mut builder = reqwest::Client::builder()

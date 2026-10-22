@@ -49,7 +49,7 @@ pub(crate) async fn open(
     headers: HeaderMap,
     start: u64,
     end: Option<u64>,
-) -> Result<Result<Ranged, reqwest::Response>, reqwest::Error> {
+) -> Result<Result<Ranged, reqwest::Response>, String> {
     let first_to = end.map_or(start + CHUNK - 1, |e| e.min(start + CHUNK - 1));
     let resp = send_range(client, url, &headers, start, first_to).await?;
     let Some((got_start, got_end, Some(total))) = partial_range(&resp) else {
@@ -144,18 +144,15 @@ async fn send_range(
     headers: &HeaderMap,
     from: u64,
     to: u64,
-) -> Result<reqwest::Response, reqwest::Error> {
-    let request = || {
-        client
-            .get(url)
-            .headers(headers.clone())
-            .header("range", format!("bytes={from}-{to}"))
-            .send()
-    };
+) -> Result<reqwest::Response, String> {
+    let mut headers = headers.clone();
+    if let Ok(v) = reqwest::header::HeaderValue::from_str(&format!("bytes={from}-{to}")) {
+        headers.insert("range", v);
+    }
     // 长下载里偶尔一段连不上，重试一次，别让几百 MB 白下
-    match request().await {
+    match crate::media::send_following(client, url, &headers).await {
         Ok(r) => Ok(r),
-        Err(_) => request().await,
+        Err(_) => crate::media::send_following(client, url, &headers).await,
     }
 }
 

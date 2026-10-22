@@ -9,9 +9,12 @@
 //! 要求 PO Token（BotGuard 产物）。而 **移动端 / TV 客户端返回的是已经签好名的
 //! 直链**——同样的内容，零 JS、零 token。
 //!
-//! 客户端按"不需要 JS 且当前仍免 PO Token"的顺序试：`visionos` 目前最稳，
-//! `ios` / `android_vr` / `tv` 作为后备。哪天 YouTube 对某个客户端加了限制，
-//! 只要挪一下本文件里 `CLIENTS` 的顺序，不用改解析逻辑。
+//! 客户端按"不需要 JS 且当前仍免 PO Token"的顺序试，见 `CLIENTS` 上的实测记录。
+//! 哪天 YouTube 对某个客户端加了限制，挪一下 `CLIENTS` 就行，不用改解析逻辑。
+//!
+//! 判断一个客户端能不能用，要把媒体**完整下载**一遍：缺 PO Token 的直链读开头
+//! 1 KB 照样 206，下到一半才 403。只验证"解析出了地址"或"能读几个字节"会把这种
+//! 地址当成可用的交给用户。
 //!
 //! ## 游客身份
 //!
@@ -37,9 +40,23 @@ struct ClientSpec {
     user_agent: &'static str,
     /// 塞进 `context.client` 的额外字段
     extra: &'static str,
+    /// 只用它的 HLS 清单：它给的直链要么加密（要跑 JS），要么缺 PO Token 下到一半就 403
+    hls_only: bool,
 }
 
-/// 按优先级排列。前面的都是"不需要 JS 播放器"的客户端。
+/// 按优先级排列，都不需要 JS 播放器。
+///
+/// 2026-10-22 带游客身份实测（直连一条普通视频、经 WARP 一条受限视频，媒体完整下载）：
+///
+/// | 客户端 | 直链 | HLS |
+/// |---|---|---|
+/// | visionOS | 完整下完 | 能下 |
+/// | iOS | 全是 `signatureCipher`，要跑 JS | 给了就能完整下完（受限视频常常不给） |
+/// | android_vr | 开头能读，完整下载时 403（缺 PO Token） | 不给 |
+/// | TV | 不带播放器签名版本直接 `UNPLAYABLE` | 不给 |
+///
+/// 所以 android_vr 和 TV 不在名单里：前者会把下不完的地址当成功结果交出去，
+/// 后者什么都拿不到，报错还会盖掉前面客户端更准确的原因。
 static CLIENTS: &[ClientSpec] = &[
     ClientSpec {
         name: "VISIONOS",
@@ -47,6 +64,7 @@ static CLIENTS: &[ClientSpec] = &[
         version: "1.02",
         user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
         extra: r#""deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471""#,
+        hls_only: false,
     },
     ClientSpec {
         name: "IOS",
@@ -54,20 +72,7 @@ static CLIENTS: &[ClientSpec] = &[
         version: "21.26.4",
         user_agent: "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
         extra: r#""deviceMake":"Apple","deviceModel":"iPhone16,2","osName":"iPhone","osVersion":"18.3.2.22D82""#,
-    },
-    ClientSpec {
-        name: "ANDROID_VR",
-        id: 28,
-        version: "1.65.10",
-        user_agent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-        extra: r#""deviceMake":"Oculus","deviceModel":"Quest 3","androidSdkVersion":32,"osName":"Android","osVersion":"12L""#,
-    },
-    ClientSpec {
-        name: "TVHTML5",
-        id: 7,
-        version: "7.20260707.07.00",
-        user_agent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko) Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)",
-        extra: "",
+        hls_only: true,
     },
 ];
 
@@ -86,7 +91,9 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
         )));
     }
 
-    let mut last: Option<Error> = None;
+    // 报第一个失败的客户端的原因：名单按优先级排，后面的客户端常常只是"这个客户端
+    // 不行"（受限、没数据），会把"出口被判成机器人"这种用户能处理的原因盖掉
+    let mut first_err: Option<Error> = None;
     // 只拿到 HLS 清单、没有可下载档位的结果。能播但没法选清晰度、没法下载，
     // 所以先扣下来继续问下一个客户端，全都不行了再拿它顶上。
     let mut degraded: Option<VideoInfo> = None;
@@ -94,7 +101,7 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
 
     for client in CLIENTS {
         let outcome = match player(http, client, video_id, visitor.as_deref()).await {
-            Ok(resp) => build(&resp, video_id),
+            Ok(resp) => build(&resp, video_id, client.hls_only),
             Err(e) => Err(e),
         };
         match outcome {
@@ -111,7 +118,7 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
             // 换一个很可能就过了——YouTube 的风控是按客户端下发的。
             Err(e) => {
                 tracing::debug!(client = client.name, error = %e, "换下一个 InnerTube 客户端");
-                last = Some(e);
+                first_err.get_or_insert(e);
             }
         }
     }
@@ -119,12 +126,15 @@ pub async fn parse_id(http: &Http, video_id: &str) -> Result<VideoInfo> {
     if let Some(info) = degraded {
         return Ok(info);
     }
-    if last.as_ref().is_some_and(|e| e.reason == Reason::Blocked) {
+    if first_err
+        .as_ref()
+        .is_some_and(|e| e.reason == Reason::Blocked)
+    {
         // 这份身份可能被风控标记了，下次换一份。不在这里立刻重试：出口 IP 被封时
         // 换身份也没用，只会让失败的请求多等一轮
         identity::forget_youtube();
     }
-    Err(last.unwrap_or_else(|| Error::parse("所有 InnerTube 客户端都没拿到播放数据")))
+    Err(first_err.unwrap_or_else(|| Error::parse("所有 InnerTube 客户端都没拿到播放数据")))
 }
 
 async fn player(
@@ -183,7 +193,10 @@ fn context_client(client: &ClientSpec, visitor: Option<&str>) -> Result<Value> {
     Ok(value)
 }
 
-fn build(resp: &Value, video_id: &str) -> Result<VideoInfo> {
+/// `hls_only` 的客户端不读直链，见 [`ClientSpec::hls_only`]。
+static NO_DIRECT: Value = Value::Null;
+
+fn build(resp: &Value, video_id: &str, hls_only: bool) -> Result<VideoInfo> {
     check_playability(resp)?;
 
     // 这两块是 InnerTube 响应里最大的子树，活到函数结束，借用就够，
@@ -193,6 +206,7 @@ fn build(resp: &Value, video_id: &str) -> Result<VideoInfo> {
 
     // 直播：只有 HLS，没有可下载的分段
     let hls = util::str_at(streaming, &["hlsManifestUrl"]);
+    let streaming = if hls_only { &NO_DIRECT } else { streaming };
 
     // progressive：音视频合一，浏览器能直接播。YouTube 现在只给到 360p/720p。
     let progressive: Vec<&Value> = util::arr_at(streaming, &["formats"])
@@ -569,7 +583,7 @@ mod tests {
             }
         });
 
-        let info = build(&resp, "dQw4w9WgXcQ").unwrap();
+        let info = build(&resp, "dQw4w9WgXcQ", false).unwrap();
         assert_eq!(
             info.video_url, "https://v/360.mp4",
             "默认给能直接播的合一档"
@@ -603,8 +617,57 @@ mod tests {
             "streamingData": {"adaptiveFormats": [{"signatureCipher": "s=1"}]}
         });
         assert_eq!(
-            build(&resp, "dQw4w9WgXcQ").unwrap_err().reason,
+            build(&resp, "dQw4w9WgXcQ", false).unwrap_err().reason,
             Reason::Empty
+        );
+    }
+
+    #[test]
+    fn hls_only_client_never_hands_out_direct_links() {
+        // 直链看着完好（不带 signatureCipher），但这个客户端缺 PO Token 会下到一半 403
+        let resp = serde_json::json!({
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"title": "x", "lengthSeconds": "60"},
+            "streamingData": {
+                "hlsManifestUrl": "https://manifest.googlevideo.com/api/manifest/hls_variant/x",
+                "formats": [{"url": "https://v/360.mp4", "height": 360, "mimeType": "video/mp4"}],
+                "adaptiveFormats": [
+                    {"url": "https://v/1080.mp4", "height": 1080, "mimeType": "video/mp4; codecs=\"avc1\""},
+                    {"url": "https://a/a.m4a", "mimeType": "audio/mp4; codecs=\"mp4a\"", "bitrate": 128000}
+                ]
+            }
+        });
+        let info = build(&resp, "dQw4w9WgXcQ", true).unwrap();
+        assert_eq!(
+            info.video_url,
+            "https://manifest.googlevideo.com/api/manifest/hls_variant/x"
+        );
+        assert!(info.formats.is_empty(), "只能给 HLS");
+        // 同样的响应，直链可用的客户端照常给档位
+        assert!(!build(&resp, "dQw4w9WgXcQ", false)
+            .unwrap()
+            .formats
+            .is_empty());
+
+        // 没有 HLS 就是什么都没拿到，换下一个客户端
+        let mut no_hls = resp;
+        no_hls["streamingData"]
+            .as_object_mut()
+            .unwrap()
+            .remove("hlsManifestUrl");
+        assert_eq!(
+            build(&no_hls, "dQw4w9WgXcQ", true).unwrap_err().reason,
+            Reason::Empty
+        );
+    }
+
+    #[test]
+    fn fallback_chain_matches_what_was_measured() {
+        let chain: Vec<(&str, bool)> = CLIENTS.iter().map(|c| (c.name, c.hls_only)).collect();
+        assert_eq!(
+            chain,
+            [("VISIONOS", false), ("IOS", true)],
+            "改名单要先按 CLIENTS 上的方法完整下载验证一遍，再更新那张表"
         );
     }
 

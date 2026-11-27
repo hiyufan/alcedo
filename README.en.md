@@ -11,7 +11,7 @@ and available quality options.
 [![npm](https://img.shields.io/npm/v/alcedo-cli.svg)](https://www.npmjs.com/package/alcedo-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
-[![Platforms](https://img.shields.io/badge/platforms-35-green.svg)](#supported-platforms)
+[![Platforms](https://img.shields.io/badge/platforms-36-green.svg)](#supported-platforms)
 
 **English** · [简体中文](README.md)
 
@@ -52,7 +52,7 @@ $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
 | Feature | Details |
 | --- | --- |
-| 35 platforms | Supports the Chinese and international sites listed below |
+| 36 platforms | Supports the Chinese and international sites listed below |
 | Native Rust | Built-in extraction paths do not require Python, Node or a headless browser |
 | Consistent output | Shared data structures for media URLs, galleries, Live Photos and author information |
 | Multiple qualities | Returns available formats, including 4K, AV1, H.265 and audio-only where provided; identifies separate audio and video tracks |
@@ -67,7 +67,7 @@ $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
 Douyin · Kuaishou · Xiaohongshu · Bilibili<br>
 Weibo · Weishi · Oasis · Zuiyou<br>
-Xigua · Pipixia · Pipigaoxiao<br>
+Xigua · Toutiao · Pipixia · Pipigaoxiao<br>
 Huya · AcFun · Duxiaoshi · PearVideo<br>
 Tencent Video · Sohu Video · CCTV<br>
 Doupai · Meipai · Haokan<br>

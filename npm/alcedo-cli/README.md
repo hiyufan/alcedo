@@ -2,7 +2,7 @@
 
 [alcedo](https://github.com/hiyufan/alcedo) 的命令行，预编译二进制，无需 Rust 工具链。
 给一条分享链接，返回媒体地址、图集、封面、作者和可用清晰度，支持抖音、快手、小红书、
-B 站、微博、YouTube、TikTok 等 35 个平台。
+B 站、微博、YouTube、TikTok 等 36 个平台。
 
 The command-line tool for [alcedo](https://github.com/hiyufan/alcedo), shipped as a
 prebuilt binary. No Rust toolchain needed.

@@ -25,6 +25,7 @@ pub mod redbook;
 pub mod signer;
 pub mod simple;
 pub mod sohu;
+pub mod toutiao;
 pub mod weibo;
 pub mod xigua;
 pub mod xinpianchang;
@@ -53,6 +54,7 @@ pub async fn dispatch(http: &Http, source: Source, url: &str) -> Result<VideoInf
         Source::ZuiYou => simple::zuiyou(http, url).await,
         Source::QuanMin => simple::quanmin(http, url).await,
         Source::XiGua => xigua::parse(http, url).await,
+        Source::TouTiao => toutiao::parse(http, url).await,
         Source::LiShiPin => lishipin::parse(http, url).await,
         Source::PiPiGaoXiao => simple::pipigaoxiao(http, url).await,
         Source::HuYa => huya::parse(http, url).await,
@@ -99,6 +101,7 @@ pub async fn dispatch_id(http: &Http, source: Source, id: &str) -> Result<VideoI
         Source::ZuiYou => simple::zuiyou_id(http, id).await,
         Source::QuanMin => simple::quanmin_id(http, id).await,
         Source::XiGua => xigua::parse_id(http, id).await,
+        Source::TouTiao => toutiao::parse_id(http, id).await,
         Source::LiShiPin => lishipin::parse_id(http, id).await,
         Source::PiPiGaoXiao => simple::pipigaoxiao_id(http, id).await,
         Source::HuYa => huya::parse_id(http, id).await,

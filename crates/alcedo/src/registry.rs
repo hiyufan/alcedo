@@ -30,6 +30,7 @@ static DOMAINS: &[(&str, Source)] = &[
     ("xspshare.baidu.com", Source::QuanMin),
     ("quanmin.hao222.com", Source::QuanMin),
     ("ixigua.com", Source::XiGua),
+    ("toutiao.com", Source::TouTiao),
     ("pearvideo.com", Source::LiShiPin),
     ("pipigx.com", Source::PiPiGaoXiao),
     ("ippzone.com", Source::PiPiGaoXiao),
@@ -48,6 +49,8 @@ static DOMAINS: &[(&str, Source)] = &[
     ("xiaohongshu.com", Source::RedBook),
     ("xhslink.com", Source::RedBook),
     ("xhslink.cn", Source::RedBook),
+    // 小红书国际版，笔记 ID 与 xsec_token 和国内站通用
+    ("rednote.com", Source::RedBook),
     ("v.qq.com", Source::QQVideo),
     ("sohu.com", Source::Sohu),
     ("cctv.cn", Source::CCTV),
@@ -62,6 +65,8 @@ static DOMAINS: &[(&str, Source)] = &[
     ("youtu.be", Source::YouTube),
     ("youtube-nocookie.com", Source::YouTube),
     ("tiktok.com", Source::TikTok),
+    // TikTok App 分享的短链
+    ("tt.site", Source::TikTok),
     ("instagram.com", Source::Instagram),
     ("ddinstagram.com", Source::Instagram),
     ("threads.net", Source::Threads),
@@ -117,8 +122,10 @@ pub fn supported() -> Vec<Source> {
 pub const fn warmup_host(source: Source) -> Option<&'static str> {
     Some(match source {
         Source::DouYin => "www.douyin.com",
-        // 西瓜作品走抖音的 slidesinfo 接口
+        // 西瓜、头条视频的作品走抖音的 slidesinfo 接口
         Source::XiGua => "www.douyin.com",
+        // 微头条读手机版页面；头条视频第一跳也常是 m.toutiao.com 的短链
+        Source::TouTiao => "m.toutiao.com",
         Source::BiliBili => "api.bilibili.com",
         Source::YouTube => "www.youtube.com",
         Source::TikTok => "www.tiktok.com",
@@ -191,6 +198,13 @@ mod tests {
             ),
             ("https://x.com/user/status/123", Source::Twitter),
             ("https://www.tiktok.com/@u/video/123", Source::TikTok),
+            ("https://tt.site/abc", Source::TikTok),
+            ("https://www.rednote.com/explore/abc", Source::RedBook),
+            (
+                "https://so.douyin.com/video/detail?aweme_id=1",
+                Source::DouYin,
+            ),
+            ("https://mapp.api.weibo.cn/fx/abc.html", Source::WeiBo),
         ];
         for (url, want) in cases {
             assert_eq!(detect(url), Some(want), "识别错了: {url}");

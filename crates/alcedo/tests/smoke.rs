@@ -221,6 +221,37 @@ async fn xigua_routes_through_douyin() {
     assert!(!info.title.is_empty(), "标题为空");
 }
 
+/// 头条视频和西瓜一样并入了抖音，作品 ID 就是 aweme_id。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn toutiao_video_routes_through_douyin() {
+    let info = parse("https://m.toutiao.com/video/7505382061495176511/").await;
+    assert_eq!(info.source, Some(alcedo::Source::TouTiao));
+    assert!(!info.video_url.is_empty(), "头条视频要拿到直链");
+    assert_usable(&info);
+    assert_playable(&info).await;
+}
+
+/// App「复制链接」的短链跳到微头条，取帖子里的全部图片。
+#[tokio::test]
+#[ignore = "要联网"]
+async fn toutiao_post_short_link() {
+    let client = Client::new().expect("初始化失败");
+    match client.parse("https://m.toutiao.com/is/4L87OofBqBQ/").await {
+        Ok(info) => {
+            println!("微头条 -> {}（{} 张图）", info.title, info.images.len());
+            assert!(!info.images.is_empty(), "微头条要拿到图片");
+            assert_usable(&info);
+            assert_playable(&info).await;
+        }
+        // 短链有有效期，过期了是内容的问题不是解析器的问题
+        Err(e) if e.reason == alcedo::Reason::Deleted => {
+            println!("短链已过期（{e}），跳过");
+        }
+        Err(e) => panic!("微头条短链解析失败 [{}] {e}", e.reason),
+    }
+}
+
 /// 短链要能跟到作品 ID。这条和上面那条走的是不同的分支。
 ///
 /// 注意这里只验证"跟得到、解析得出"，不断言具体内容——短链本身可能过期。

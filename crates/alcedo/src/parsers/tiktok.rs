@@ -19,8 +19,12 @@ const WEB_REFERER: &str = "https://www.tiktok.com/";
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let host = util::host_of(url).unwrap_or_default();
 
-    // vm./vt./t. 都是短链，先跟到真实地址
-    let page_url = if host.starts_with("vm.") || host.starts_with("vt.") || host.starts_with("t.") {
+    // vm./vt./t. 和 tt.site 都是短链，先跟到真实地址
+    let page_url = if host.starts_with("vm.")
+        || host.starts_with("vt.")
+        || host.starts_with("t.")
+        || host == "tt.site"
+    {
         http.resolve_redirect(url).await?
     } else {
         url.to_owned()

@@ -33,6 +33,8 @@ pub enum Source {
     QuanMin,
     /// 西瓜视频
     XiGua,
+    /// 今日头条
+    TouTiao,
     /// 梨视频
     LiShiPin,
     /// 皮皮搞笑
@@ -101,6 +103,7 @@ impl Source {
             Source::ZuiYou => "zuiyou",
             Source::QuanMin => "quanmin",
             Source::XiGua => "xigua",
+            Source::TouTiao => "toutiao",
             Source::LiShiPin => "lishipin",
             Source::PiPiGaoXiao => "pipigaoxiao",
             Source::HuYa => "huya",
@@ -142,6 +145,7 @@ impl Source {
             Source::ZuiYou => "最右",
             Source::QuanMin => "度小视",
             Source::XiGua => "西瓜视频",
+            Source::TouTiao => "今日头条",
             Source::LiShiPin => "梨视频",
             Source::PiPiGaoXiao => "皮皮搞笑",
             Source::HuYa => "虎牙",
@@ -202,6 +206,7 @@ impl Source {
         Source::ZuiYou,
         Source::QuanMin,
         Source::XiGua,
+        Source::TouTiao,
         Source::LiShiPin,
         Source::PiPiGaoXiao,
         Source::HuYa,
@@ -573,7 +578,7 @@ mod tests {
     #[test]
     fn all_list_is_complete() {
         // 漏一个的话 from_str 和反序列化就会对它失效, 但编译器不会提醒
-        assert_eq!(Source::ALL.len(), 35, "新增平台后要同步 Source::ALL");
+        assert_eq!(Source::ALL.len(), 36, "新增平台后要同步 Source::ALL");
     }
 
     #[test]

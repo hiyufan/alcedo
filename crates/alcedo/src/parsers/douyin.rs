@@ -17,6 +17,17 @@ use crate::util;
 /// 解析一条抖音分享链接。
 pub async fn parse(http: &Http, url: &str) -> Result<VideoInfo> {
     let host = util::host_of(url).unwrap_or_default();
+    // 同属 douyin.com、但不是作品的子域名：直播间路径里的数字是房间号，不能当作品 ID 去查。
+    // 直接说清楚，免得用户以为作品被删了
+    match host.as_str() {
+        "live.douyin.com" => {
+            return Err(Error::unsupported(
+                "这是直播间链接，直播还不能解析；打开作品后再复制分享链接",
+            ))
+        }
+        "qishui.douyin.com" => return Err(Error::unsupported("汽水音乐的链接还不支持")),
+        _ => {}
+    }
 
     let target = if host == "v.douyin.com" {
         // 短链跳转和领游客身份互不依赖，一起发。身份缓存命中时第二个立即返回；
@@ -67,10 +78,12 @@ fn video_id_from_url(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
 
     // 网页精选页: https://www.douyin.com/jingxuan?modal_id=7555093909760789812
-    if let Some((_, v)) = parsed.query_pairs().find(|(k, _)| k == "modal_id") {
-        if !v.is_empty() {
-            return Some(v.into_owned());
-        }
+    // 搜索结果页: https://so.douyin.com/video/detail?aweme_id=7139338537526136100&awemeType=0
+    if let Some((_, v)) = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "modal_id" || k == "aweme_id")
+    {
+        return is_digits(&v).then(|| v.into_owned());
     }
 
     // https://www.iesdouyin.com/share/video/{id}/
@@ -78,8 +91,12 @@ fn video_id_from_url(url: &str) -> Option<String> {
     parsed
         .path_segments()?
         .filter(|s| !s.is_empty())
-        .rfind(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        .rfind(|s| is_digits(s))
         .map(str::to_owned)
+}
+
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// 地址是不是图文作品（`/note/{id}`、`/share/note/{id}/`、`/share/slides/{id}/`）。
@@ -299,7 +316,7 @@ fn build(data: &Value) -> Result<VideoInfo> {
             .map_or_else(|| util::str_at(music, &["uri"]), str::to_owned)
     };
 
-    let cover_url = util::prefer_non_webp(util::arr_at(video, &["cover", "url_list"]));
+    let cover_url = video_cover(video);
 
     let author = util::get_or_null(data, &["author"]);
     let avatar = util::arr_at(author, &["avatar_thumb", "url_list"])
@@ -338,6 +355,17 @@ fn build(data: &Value) -> Result<VideoInfo> {
 ///
 /// 每个 (短边, 编码) 只留码率最高的一档，并且只保留比默认直链更清晰的，
 /// 或者同清晰度但体积更小的 H.265。
+/// 作者选的封面。`cover` 是 300×400 的居中裁切小图，`cover_original_scale` 是同一张图
+/// 按原比例缩放、不裁切，优先用它。`origin_cover` 多是视频首帧而不是作者选的封面，不用。
+/// 地址都带签名，不能改尺寸参数换大图。
+fn video_cover(video: &Value) -> String {
+    ["cover_original_scale", "cover"]
+        .iter()
+        .map(|key| util::prefer_non_webp(util::arr_at(video, &[key, "url_list"])))
+        .find(|u| !u.is_empty())
+        .unwrap_or_default()
+}
+
 fn collect_formats(video: &Value, primary: &Value) -> Vec<Format> {
     let primary_key = util::str_at(primary, &["url_key"]);
     let primary_short = short_side(
@@ -453,6 +481,18 @@ mod tests {
                 "https://www.douyin.com/jingxuan?modal_id=7555093909760789812",
                 "7555093909760789812",
             ),
+            (
+                "https://so.douyin.com/video/detail?aweme_id=7139338537526136100&awemeType=0",
+                "7139338537526136100",
+            ),
+            (
+                "https://douyin.com/video/7424432820954598707",
+                "7424432820954598707",
+            ),
+            (
+                "https://m.douyin.com/share/video/7424432820954598707/",
+                "7424432820954598707",
+            ),
         ];
         for (url, want) in cases {
             assert_eq!(video_id_from_url(url).as_deref(), Some(want), "{url}");
@@ -467,6 +507,28 @@ mod tests {
             None
         );
         assert_eq!(video_id_from_url("https://www.douyin.com/"), None);
+        // 查询参数里的 ID 不是数字时不能拿去查接口
+        assert_eq!(
+            video_id_from_url("https://www.douyin.com/jingxuan?modal_id=abc"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn live_and_music_subdomains_say_what_they_are() {
+        let http = Http::new(
+            std::sync::Arc::new(crate::Config::default()),
+            Some(crate::Source::DouYin),
+        )
+        .unwrap();
+        for (url, hint) in [
+            ("https://live.douyin.com/123456789", "直播间"),
+            ("https://qishui.douyin.com/s/abc/", "汽水音乐"),
+        ] {
+            let err = parse(&http, url).await.unwrap_err();
+            assert_eq!(err.reason, crate::Reason::Unsupported, "{url}");
+            assert!(err.to_string().contains(hint), "{url}: {err}");
+        }
     }
 
     #[test]
@@ -585,5 +647,18 @@ mod tests {
     fn empty_payload_is_reported_as_empty() {
         let err = build(&json!({"desc": "空"})).unwrap_err();
         assert_eq!(err.reason, Reason::Empty);
+    }
+
+    #[test]
+    fn cover_prefers_the_uncropped_original_scale() {
+        let video = json!({
+            "cover": { "url_list": ["https://p/crop.jpeg"] },
+            "cover_original_scale": { "url_list": ["https://p/full.webp", "https://p/full.jpeg"] },
+            "origin_cover": { "url_list": ["https://p/first-frame.jpeg"] }
+        });
+        assert_eq!(video_cover(&video), "https://p/full.jpeg");
+
+        let only_cropped = json!({ "cover": { "url_list": ["https://p/crop.jpeg"] } });
+        assert_eq!(video_cover(&only_cropped), "https://p/crop.jpeg");
     }
 }

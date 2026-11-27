@@ -10,7 +10,7 @@
 [![npm](https://img.shields.io/npm/v/alcedo-cli.svg)](https://www.npmjs.com/package/alcedo-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
-[![Platforms](https://img.shields.io/badge/platforms-35-green.svg)](#支持的平台)
+[![Platforms](https://img.shields.io/badge/platforms-36-green.svg)](#支持的平台)
 
 [English](README.en.md) · **简体中文**
 
@@ -51,7 +51,7 @@ $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
 | 特性 | 说明 |
 | --- | --- |
-| 35 个平台 | 支持下列国内与海外站点 |
+| 36 个平台 | 支持下列国内与海外站点 |
 | 原生 Rust | 内置解析路径不依赖 Python、Node 或无头浏览器 |
 | 统一输出 | 视频地址、图集、实况照片和作者信息使用统一数据结构 |
 | 多清晰度 | 返回平台可用的档位，包括部分内容的 4K、AV1、H.265 和纯音频；标明分离的音视频轨 |
@@ -66,7 +66,7 @@ $ alcedo https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
 抖音 · 快手 · 小红书 · 哔哩哔哩<br>
 微博 · 微视 · 绿洲 · 最右<br>
-西瓜视频 · 皮皮虾 · 皮皮搞笑<br>
+西瓜视频 · 今日头条 · 皮皮虾 · 皮皮搞笑<br>
 虎牙 · AcFun · 度小视 · 梨视频<br>
 腾讯视频 · 搜狐视频 · 央视网<br>
 逗拍 · 美拍 · 好看视频<br>

@@ -364,19 +364,23 @@ pub async fn haokan_id(http: &Http, id: &str) -> Result<VideoInfo> {
 
     let meta = util::get(&json, &["data", "apiData", "curVideoMeta"])
         .ok_or_else(|| Error::deleted("好看视频没有返回作品"))?;
+    Ok(haokan_build(meta))
+}
 
-    Ok(VideoInfo {
+fn haokan_build(meta: &Value) -> VideoInfo {
+    VideoInfo {
         video_url: util::str_at(meta, &["playurl"]),
         cover_url: util::str_at(meta, &["poster"]),
         title: util::str_at(meta, &["title"]),
         duration: util::num_at(meta, &["duration"]),
+        // 部分作品（如转载自其他来源）没有 mth，作者只在顶层的 source_name / avatar 里
         author: Author::new(
-            util::id_at(meta, &["mth", "mthid"]),
-            util::str_at(meta, &["mth", "author_name"]),
-            util::str_at(meta, &["mth", "author_photo"]),
+            util::first_id(meta, &[&["mth", "mthid"], &["siteAccountId"]]),
+            util::first_str(meta, &[&["mth", "author_name"], &["source_name"]]),
+            util::first_str(meta, &[&["mth", "author_photo"], &["avatar"]]),
         ),
         ..Default::default()
-    })
+    }
 }
 
 #[cfg(test)]
@@ -447,5 +451,23 @@ mod tests {
     fn missing_message_falls_back_to_code() {
         let err = check_code(&json!({"ret": 7}), &["ret"], 0, &[&["msg"]]).unwrap_err();
         assert!(err.detail.contains("code=7"));
+    }
+
+    #[test]
+    fn haokan_author_falls_back_to_top_level_fields() {
+        let with_mth = json!({ "title": "t", "playurl": "https://v/a.mp4",
+            "mth": { "mthid": "11", "author_name": "作者", "author_photo": "https://p/a.jpg" },
+            "source_name": "来源", "avatar": "https://p/b.jpg" });
+        let info = haokan_build(&with_mth);
+        assert_eq!(info.author.name, "作者");
+        assert_eq!(info.author.uid, "11");
+
+        // 转载作品没有 mth
+        let without_mth = json!({ "title": "t", "playurl": "https://v/a.mp4",
+            "siteAccountId": 22, "source_name": "来源", "avatar": "https://p/b.jpg" });
+        let info = haokan_build(&without_mth);
+        assert_eq!(info.author.name, "来源");
+        assert_eq!(info.author.uid, "22");
+        assert_eq!(info.author.avatar, "https://p/b.jpg");
     }
 }
